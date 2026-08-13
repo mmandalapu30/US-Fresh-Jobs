@@ -1,0 +1,37 @@
+# Build context hygiene. All three images build from the repo root, so without this the
+# daemon receives .git, caches and any local .env file on every build.
+
+# Secrets must never reach an image layer. Compose passes .env.production in at runtime
+# via env_file -- it is not copied in, and must not be.
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+.git
+.github
+.gitignore
+
+# Reinstalled inside the image; a stale local copy would otherwise overwrite the one
+# `npm ci` just produced in the deps stage.
+node_modules
+**/node_modules
+.next
+**/.next
+
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+*.egg-info
+**/*.egg-info
+.venv
+venv
+
+logs
+*.log
+
+docs
+tests
+.vscode

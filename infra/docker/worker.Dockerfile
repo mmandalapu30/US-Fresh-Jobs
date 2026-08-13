@@ -36,6 +36,12 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY workers/ingestion/ingestion ./ingestion
 COPY database ./database
+# The operational entry points. This image is what scripts/daily.sh drives, and it invokes
+# scripts/have_todays_file.py, scripts/ingest.py and scripts/enforce_retention.py by path --
+# so without these the compose `command` fails on a missing file, not on anything subtle.
+# They insert <root>/packages/* onto sys.path, which does not exist here and does not need
+# to: the builder pip-installs those packages into /opt/venv.
+COPY scripts ./scripts
 
 USER appuser
 

@@ -22,6 +22,8 @@ timers. Everything below is in the repo; nothing needs to be written on the serv
 | `api` | no | FastAPI on :8000, internal only. |
 | `postgres` | no | No host port. |
 | `redis` | no | No host port. |
+| `minio` | no | Raw source archive, S3-compatible. No host port; console not reachable from outside. |
+| `minio-init` | n/a | One-shot bucket creation on every `up`. Idempotent. |
 | `ingest` | n/a | One-shot, `profiles: ["ingest"]`. Started by the timers, never by `up`. |
 
 The API is deliberately unreachable from outside. The browser talks only to Next, and Next
@@ -44,6 +46,8 @@ cp .env.production.example .env.production
 #   POSTGRES_PASSWORD          generate: openssl rand -base64 36
 #   SECRET_KEY / JWT_SECRET    generate: python -c "import secrets;print(secrets.token_urlsafe(64))"
 #   CORS_ALLOW_ORIGINS         https://your-domain
+#   OBJECT_STORAGE_ACCESS_KEY  MinIO root user, generate: openssl rand -base64 24
+#   OBJECT_STORAGE_SECRET_KEY  MinIO root password, same (min 8 chars)
 #   INGEST_CATEGORY_ALLOWLIST  data-engineering,software
 ```
 
@@ -211,6 +215,24 @@ Not configured by this stack — decide before you have data worth losing.
 A dump is not a backup until a restore has been tested. Restore into a scratch database
 and count rows before trusting it.
 
+**The raw archive grows without bound.** MinIO holds one ~120 MB source file per day
+with versioning on, so the `minio_data` volume gains roughly **44 GB a year** and
+nothing prunes it. Postgres is the system of record — the archive exists to re-run an
+ingest against a past day — so the cheap answer is a bucket lifecycle rule rather than a
+bigger disk:
+
+```bash
+# keep 90 days of raw files. Sets the alias first: the one `minio-init` created lives in
+# that container, not this one.
+docker exec jobplatform-minio sh -c   'mc alias set me http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
+   mc ilm rule add --expire-days 90 me/jobplatform-raw'
+
+# older mc builds spell it: mc ilm add --expiry-days 90 me/jobplatform-raw
+```
+
+Confirm with `mc ilm rule ls me/jobplatform-raw`, and watch the volume with
+`docker system df -v | grep minio_data`.
+
 ---
 
 ## 6. If something does not come up
@@ -222,6 +244,8 @@ and count rows before trusting it.
 | Caddy will not get a certificate | DNS not pointing here, or :80 blocked | Certificate issuance needs inbound :80. Test with `SITE_ADDRESS=:80` first. |
 | Ingest exits 3 every time | A run is wedged `RUNNING` | Wait 120 minutes for the automatic reclaim, or mark it `FAILED` by hand. |
 | Ingest stores far more than expected | `INGEST_CATEGORY_ALLOWLIST` empty | Set it, then `python scripts/purge_out_of_scope.py` (dry run first). |
+| Ingest fails `NoSuchBucket` or connection refused to `minio:9000` | `up` was run before the storage credentials were set, so `minio-init` never created the bucket | `docker compose ... up -d minio minio-init` and check `docker logs jobplatform-minio-init` |
+| `minio` will not start | Access key under 3 chars or secret under 8 | MinIO enforces both minimums; regenerate with `openssl rand -base64 24` |
 | `postgres` restarts on first boot | `POSTGRES_INITDB_ARGS` changed after init | Data checksums are settable only at initdb. Changing later needs dump/restore. |
 
 ---
