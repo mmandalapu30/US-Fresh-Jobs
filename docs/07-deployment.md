@@ -46,10 +46,21 @@ cp .env.production.example .env.production
 #   POSTGRES_PASSWORD          generate: openssl rand -base64 36
 #   SECRET_KEY / JWT_SECRET    generate: python -c "import secrets;print(secrets.token_urlsafe(64))"
 #   CORS_ALLOW_ORIGINS         https://your-domain
-#   OBJECT_STORAGE_ACCESS_KEY  MinIO root user, generate: openssl rand -base64 24
-#   OBJECT_STORAGE_SECRET_KEY  MinIO root password, same (min 8 chars)
+#   OBJECT_STORAGE_ACCESS_KEY  MinIO root user,     generate: openssl rand -hex 24
+#   OBJECT_STORAGE_SECRET_KEY  MinIO root password, generate: openssl rand -hex 24
 #   INGEST_CATEGORY_ALLOWLIST  data-engineering,software
 ```
+
+**Two rules the hardening check enforces, both of which stop the API booting.** It runs
+only when `ENVIRONMENT=production`, so neither shows up in development:
+
+- **All four secrets must be at least 32 characters** — `SECRET_KEY`, `JWT_SECRET` and
+  *both* object-storage credentials, the access key included. MinIO's own minimums are
+  much lower, so a key MinIO accepts can still stop the API.
+- **`CORS_ALLOW_ORIGINS` must be https**, and must not be `*`. This applies even when you
+  are testing on `SITE_ADDRESS=:80` over plain HTTP — set `https://<host>` regardless.
+  Nothing breaks, because the browser never calls the API cross-origin; Next proxies it
+  server-side, so the value is validated but effectively unused by the UI.
 
 `INGEST_CATEGORY_ALLOWLIST` deserves the attention. **Empty means every category**, which
 is the shipped default and correct as a default — but leaving it unset on this deployment
