@@ -1,0 +1,34 @@
+# Afternoon re-check: ingest only, and only if today's file has not already landed.
+#
+# The publisher's upload hour varies across roughly 06:30-14:15 UTC, so the 09:00 Eastern
+# primary run finds nothing on the days it uploads late. This closes that gap the same
+# day instead of leaving it to tomorrow morning.
+#
+# Cheap by construction: scripts/have_todays_file.py answers from one indexed query and
+# the run stops there once the day is done, so the usual cost of a pass is a database
+# round trip -- no directory listing, no download, no sync_runs row.
+
+[Unit]
+Description=US Fresh Jobs - ingest catch-up (only if today's file is still missing)
+Documentation=file:///srv/job-platform/docs/07-deployment.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/job-platform
+Environment=COMPOSE=1
+ExecStart=/srv/job-platform/scripts/daily.sh --catch-up
+TimeoutStartSec=3h
+
+# Deliberately not Conflicts= with the primary unit. If a slow primary run is still going
+# when the first catch-up fires, the catch-up asks the database for the per-source lock,
+# is refused, logs "another ingest is already running" and exits 0. That is a cleaner
+# outcome than systemd killing one of the two mid-write.
+
+#User=deploy
+#Group=docker
+
+StandardOutput=journal
+StandardError=journal

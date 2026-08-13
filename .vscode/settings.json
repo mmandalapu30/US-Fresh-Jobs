@@ -1,0 +1,26 @@
+{
+    "serverpulse.ai.enabled": true,
+    "serverpulse.ai.optInShown": true,
+    "serverpulse.services": [
+        {
+            "name": "postgres (docker)",
+            "type": "docker",
+            "port": 8000,
+            "useDocker": {
+                "pathToComposeFile": {
+                    "$mid": 1,
+                    "fsPath": "d:\\Projects\\JobSearch\\docker-compose.yml",
+                    "_sep": 1,
+                    "external": "file:///d%3A/Projects/JobSearch/docker-compose.yml",
+                    "path": "/d:/Projects/JobSearch/docker-compose.yml",
+                    "scheme": "file"
+                },
+                "selectedContainerName": "jobplatform-postgres",
+                "serviceName": "postgres"
+            },
+            "healthCheckPath": "",
+            "enableHealthCheck": true,
+            "healthCheckInterval": 30000
+        }
+    ]
+}

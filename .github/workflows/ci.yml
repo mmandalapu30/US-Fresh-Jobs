@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Lint and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install ruff mypy
+      - run: pip install -e ./packages/shared -e ./packages/schemas
+      - name: Ruff
+        run: ruff check --output-format=github .
+      - name: Ruff format check
+        run: ruff format --check .
+      - name: mypy
+        run: mypy packages apps/api/app || true   # advisory until M9 lands the typed API layer
+
+  layering:
+    name: Source isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Blocking, not advisory: provider knowledge leaking out of its connector is the
+      # architectural failure the whole connector abstraction exists to prevent.
+      - name: No provider knowledge outside its connector
+        run: python scripts/check_layering.py
+
+  secrets-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: No real env files committed
+        run: |
+          # .env.example and .env.production.example are templates and are expected.
+          # Any other .env.* in the tree means a credential may have been committed.
+          unexpected=$(git ls-files '.env*' | grep -v -E '^\.env(\.production)?\.example$' || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::tracked env files that may contain secrets: $unexpected"
+            exit 1
+          fi
+      - name: Templates contain only placeholders
+        run: |
+          # Every secret in a tracked template must still be the CHANGE_ME placeholder.
+          for f in .env.example .env.production.example; do
+            for key in SECRET_KEY JWT_SECRET OBJECT_STORAGE_SECRET_KEY; do
+              line=$(grep -E "^${key}=" "$f" || true)
+              case "$line" in
+                *CHANGE_ME*|"") ;;
+                *) echo "::error::$f: $key is not a placeholder"; exit 1 ;;
+              esac
+            done
+          done
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e ./packages/shared -e ./packages/schemas
+          pip install -e "./apps/api[dev]"
+          pip install -e "./workers/ingestion[dev]"
+          pip install alembic "psycopg[binary]" "moto[s3]"
+      - name: Migrations apply cleanly
+        run: |
+          createdb_url="postgresql+psycopg://postgres:postgres@localhost:5432/ci_migrate"
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE ci_migrate"
+          python -m alembic -c database/migrations/alembic.ini -x url=$createdb_url upgrade head
+      - name: Migrations are reversible
+        run: |
+          createdb_url="postgresql+psycopg://postgres:postgres@localhost:5432/ci_migrate"
+          python -m alembic -c database/migrations/alembic.ini -x url=$createdb_url downgrade base
+          python -m alembic -c database/migrations/alembic.ini -x url=$createdb_url upgrade head
+      - name: Test suite
+        run: pytest -v --cov=packages --cov=apps/api/app --cov-report=term-missing
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: .coverage
+          if-no-files-found: ignore
+
+  docker-build:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/api.Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/worker.Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Scheduled, not per-PR: it reaches the live Hugging Face bucket, and an upstream
+  # change should page us rather than block an unrelated pull request.
+  source-drift:
+    name: OpenJobData source drift
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install huggingface-hub pyarrow
+      - run: python scripts/verify_source.py

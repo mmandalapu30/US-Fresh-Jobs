@@ -1,0 +1,154 @@
+# Production stack. Run from the repo root:
+#
+#   docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Differences from the development compose that matter:
+#
+#   * Postgres and Redis publish no host ports. They are reachable only on the internal
+#     network, so the database is not exposed to the internet by a misconfigured firewall.
+#   * The API publishes no host port either. Only Caddy is public. This is what keeps the
+#     platform's rule that the browser never learns the API host true in production, not
+#     just by convention.
+#   * No source bind-mounts and no --reload: containers run the code baked into the image,
+#     so a deploy is a rebuild, not an edit in place.
+#   * restart: always, plus memory limits, so one runaway container cannot take the host.
+#
+# The daily ingest is NOT a long-running service here -- see the `ingest` profile at the
+# bottom and docs/07-deployment.md.
+
+name: jobplatform-prod
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: jobplatform-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Data checksums catch silent corruption early. Only settable at initdb time, so it
+      # must be right on the very first boot -- turning it on later means a dump/restore.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=16MB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    container_name: jobplatform-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+    container_name: jobplatform-api
+    env_file: [../../.env.production]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web.Dockerfile
+    container_name: jobplatform-web
+    environment:
+      API_BASE_URL: http://api:8000/api/v1
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: jobplatform-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Set SITE_ADDRESS to your domain in .env.production and Caddy provisions a
+      # certificate automatically. Use :80 while testing without DNS.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_started
+    restart: always
+
+  # One-shot ingest, started by the host's cron rather than left running:
+  #
+  #   docker compose -f infra/docker/docker-compose.prod.yml --env-file .env.production \
+  #     run --rm ingest
+  #
+  # The profile keeps it out of `up`, so it never runs as a daemon. Concurrency is safe
+  # regardless: two overlapping runs collide on the sync_files unique index and the second
+  # exits as CANCELLED rather than duplicating work.
+  ingest:
+    build:
+      context: ../..
+      dockerfile: infra/docker/worker.Dockerfile
+    env_file: [../../.env.production]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "scripts/ingest.py", "--trigger", "SCHEDULED"]
+    restart: "no"
+    profiles: ["ingest"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

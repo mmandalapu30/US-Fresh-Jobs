@@ -1,0 +1,44 @@
+# secrets — never commit
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+*.pem
+*.key
+!.env.example
+!.env.production.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# node
+node_modules/
+.next/
+out/
+.turbo/
+
+# data / local artifacts
+data/
+*.parquet
+.minio/
+pgdata/
+logs/
+scratch/
+
+# editors / os
+.DS_Store
+Thumbs.db
+.idea/

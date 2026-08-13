@@ -1,0 +1,211 @@
+# Local development environment.
+#
+#   make up        start everything
+#   make migrate   apply migrations
+#   make test      run the suite
+#
+# Values come from .env.development (git-ignored). Nothing here contains a real secret.
+# Production uses infra/docker/docker-compose.prod.yml, which adds TLS termination,
+# restart policies and resource limits.
+
+name: jobplatform
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: jobplatform-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobplatform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-jobplatform}
+      # C collation makes text comparisons faster and index order deterministic across
+      # platforms; the application never relies on locale-aware sorting.
+      POSTGRES_INITDB_ARGS: "--data-checksums --locale-provider=icu --icu-locale=en-US"
+    command:
+      - postgres
+      # Tuned for a development laptop. Production values live in the prod compose file
+      # and are derived from the actual instance size.
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      # Bulk ingestion generates a lot of WAL; larger segments reduce checkpoint churn.
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - random_page_cost=1.1
+      # Surface slow queries during development so regressions are caught early.
+      - -c
+      - log_min_duration_statement=500
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    ports:
+      - "${POSTGRES_PORT_HOST:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobplatform} -d ${POSTGRES_DB:-jobplatform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: jobplatform-redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      # Cache + broker. Evict cache keys under pressure but never silently drop queued
+      # tasks: Celery uses a different database index, and volatile-lru only evicts keys
+      # that carry a TTL, which task payloads do not.
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - volatile-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT_HOST:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: jobplatform-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY must be set}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY must be set}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_PORT_HOST:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT_HOST:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # One-shot: creates the raw-archive bucket, then exits.
+  minio-init:
+    image: minio/mc:latest
+    container_name: jobplatform-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-jobplatform-raw}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$OBJECT_STORAGE_ACCESS_KEY $$OBJECT_STORAGE_SECRET_KEY &&
+      mc mb --ignore-existing local/$$OBJECT_STORAGE_BUCKET &&
+      mc version enable local/$$OBJECT_STORAGE_BUCKET &&
+      echo 'minio bucket ready';
+      "
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    container_name: jobplatform-api
+    env_file: [.env.development]
+    environment:
+      # Override the host-facing values from .env.development with in-network names.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobplatform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobplatform}
+      REDIS_URL: redis://redis:6379/0
+      OBJECT_STORAGE_URL: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_PORT_HOST:-8000}:8000"
+    # --reload for local iteration; the production image runs without it.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./apps/api/app:/app/app:ro
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    container_name: jobplatform-web
+    env_file: [.env.development]
+    environment:
+      # In-network name. The browser never sees this: every fetch is server-side, and the
+      # variable is not NEXT_PUBLIC_, so it cannot reach the client bundle.
+      API_BASE_URL: http://api:8000/api/v1
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${WEB_PORT_HOST:-3100}:3100"
+    restart: unless-stopped
+    # This runs the production image, so there is no hot reload. For UI iteration run
+    # `npm run dev` on the host against the compose api instead.
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    container_name: jobplatform-worker
+    env_file: [.env.development]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobplatform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobplatform}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      OBJECT_STORAGE_URL: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./workers/ingestion/ingestion:/app/ingestion:ro
+    restart: unless-stopped
+    # Enabled from Milestone 3, when the connector exists. Until then the image builds
+    # but no worker is started.
+    profiles: ["workers"]
+
+  beat:
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    container_name: jobplatform-beat
+    env_file: [.env.development]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobplatform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobplatform}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "ingestion.celery_app", "beat", "--loglevel=INFO"]
+    restart: unless-stopped
+    profiles: ["workers"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

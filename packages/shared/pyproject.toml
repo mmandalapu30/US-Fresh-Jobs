@@ -1,0 +1,20 @@
+[project]
+name = "jobplatform-shared"
+version = "0.1.0"
+description = "Shared configuration, logging, database and error primitives."
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "psycopg[binary]>=3.1.18",
+    "asyncpg>=0.29",
+    "structlog>=24.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["jobplatform_shared*"]

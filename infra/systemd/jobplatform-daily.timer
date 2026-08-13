@@ -1,0 +1,23 @@
+# 09:00 America/New_York, every day.
+#
+# The zone is named rather than fixed to an offset, so the run stays at 09:00 local
+# through both daylight-saving transitions -- 13:00 UTC in summer, 14:00 UTC in winter.
+# Naming a zone in OnCalendar= requires systemd 240 or newer (Ubuntu 20.04+, Debian 11+).
+# On anything older, express the slot in UTC and accept the one-hour DST drift.
+
+[Unit]
+Description=Run the US Fresh Jobs daily ingest at 09:00 America/New_York
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 America/New_York
+
+# If the machine was off or suspended at 09:00, run once as soon as it is back rather
+# than skipping the day.
+Persistent=true
+
+# The source publishes on its own schedule; being a minute late costs nothing and lets
+# systemd batch this with other timers.
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

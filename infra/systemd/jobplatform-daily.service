@@ -1,0 +1,34 @@
+# Primary daily ingest: pull the day's file, then enforce the freshness window.
+#
+# Installed by scripts/install-systemd.sh, which rewrites WorkingDirectory/ExecStart to
+# wherever the repo actually lives. Paths below are the documented default.
+
+[Unit]
+Description=US Fresh Jobs - daily ingest (primary run)
+Documentation=file:///srv/job-platform/docs/07-deployment.md
+# The stack has to exist before there is anywhere to ingest into. Requires= rather than
+# Wants= so a run is not attempted, and recorded as failed, on a host where Docker is
+# down for maintenance.
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/job-platform
+Environment=COMPOSE=1
+ExecStart=/srv/job-platform/scripts/daily.sh
+
+# A first ingest moves ~120 MB and tens of thousands of rows, and the script's own retry
+# ladder can add 3 minutes of backoff on a flaky day. The default 90s would kill it well
+# before any of that finished.
+TimeoutStartSec=3h
+
+# Runs as root by default, which is what makes `docker compose` work with no further
+# setup. To run as an unprivileged member of the docker group instead, uncomment:
+#User=deploy
+#Group=docker
+
+# stdout and stderr go to the journal: journalctl -u jobplatform-daily.service
+StandardOutput=journal
+StandardError=journal

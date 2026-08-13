@@ -1,0 +1,25 @@
+# TLS termination and the only public entry point.
+#
+# SITE_ADDRESS comes from .env.production. Give it a domain (jobs.example.com) and Caddy
+# obtains and renews a certificate on its own; leave it as :80 to test without DNS.
+{$SITE_ADDRESS} {
+	encode gzip zstd
+
+	# Only the web app is proxied. The API is deliberately unreachable from outside the
+	# compose network -- the browser talks to Next, Next talks to the API server-side.
+	# Publishing /api here would undo that and hand the API host to every client.
+	reverse_proxy web:3100
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		# Only sent when Caddy has a real certificate; harmless over plain :80 testing.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,0 +1,19 @@
+# 11:00, 13:00, 15:00 and 17:00 America/New_York.
+#
+# The publish window closes at about 14:15 UTC, which is 10:15 Eastern in summer, so the
+# 11:00 pass already covers an ordinary late upload. The three that follow exist for the
+# days the publisher is later still or skips and backfills. Each costs one query once the
+# day's file is in.
+
+[Unit]
+Description=Re-check for today's file through the afternoon
+
+[Timer]
+OnCalendar=*-*-* 11,13,15,17:00:00 America/New_York
+
+# Not Persistent=. A catch-up missed while the machine was off is not worth replaying on
+# boot -- the primary unit is Persistent=true and will have done the same work already.
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

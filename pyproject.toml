@@ -1,0 +1,68 @@
+# Workspace-level tooling configuration.
+# Each app/package has its own pyproject.toml for dependencies; this file holds the
+# shared lint / type-check / test settings so every component is judged identically.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["apps/web", ".venv", "database/migrations/versions/*.py"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "C4",       # comprehensions
+    "UP",       # pyupgrade
+    "S",        # bandit (security)
+    "T20",      # no print() in shipped code
+    "SIM",      # simplify
+    "RUF",
+]
+ignore = [
+    "E501",    # line length handled by the formatter
+    "B008",    # FastAPI Depends() in defaults is the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use asserts and hardcoded credentials against throwaway databases.
+"**/tests/**" = ["S101", "S105", "S106", "S311"]
+"tests/**"    = ["S101", "S105", "S106", "S311"]
+"scripts/**"  = ["T20"]          # scripts are CLI tools; printing is the point
+
+[tool.ruff.lint.isort]
+known-first-party = ["jobplatform_shared", "jobplatform_schemas", "app", "ingestion"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+exclude = ["database/migrations/versions/", "apps/web/"]
+
+[[tool.mypy.overrides]]
+# Third-party packages without bundled type information.
+module = ["huggingface_hub.*", "polars.*", "pyarrow.*", "celery.*", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests", "apps/api/tests", "workers/ingestion/tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: requires a live PostgreSQL/Redis (deselect with -m 'not integration')",
+    "network: reaches an external network service such as the Hugging Face bucket",
+    "slow: takes more than a few seconds",
+]
+filterwarnings = ["error::DeprecationWarning:jobplatform_.*"]
+
+[tool.coverage.run]
+branch = true
+omit = ["*/tests/*", "*/migrations/*"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
