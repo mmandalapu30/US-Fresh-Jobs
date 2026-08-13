@@ -4,9 +4,11 @@ A continuously updated U.S. job data platform. Not a website with 100 jobs — t
 preserves every qualifying job, and the UI provides fast access to the newest and most
 relevant ones.
 
-**Current state: Milestone 3 complete.** Foundation, schema, operational surface, source
-abstraction, object storage, sync tracking and the OpenJobData connector are built and
-verified — the connector against the live bucket.
+**Current state: milestones 1–11 and 14 are built and running on live data.** Jobs flow
+from the source bucket into PostgreSQL, out through the API, and onto a rendered Next.js
+UI, on a daily schedule. Authentication, alerts and monitoring are not built. The
+production stack is written but has not yet been run on a server — see
+[`docs/07-deployment.md`](docs/07-deployment.md).
 
 ---
 
@@ -44,7 +46,7 @@ python scripts/verify_source.py
 make init            # create .env.development from the template
 make up              # postgres + redis + minio + api
 make migrate         # apply the database schema
-make test            # 278 tests
+make test            # 492 tests
 make layering        # source-isolation guard
 ```
 
@@ -53,6 +55,25 @@ Then: <http://localhost:8000/docs>
 Without Docker, point `DATABASE_URL` at a local PostgreSQL 17 and run `make migrate && make test`.
 
 `make help` lists all targets.
+
+---
+
+## The daily schedule
+
+The source publishes one delta file per day, but the upload hour varies across roughly
+06:33–14:15 UTC — so a single fixed slot regularly runs before the day's file exists. The
+schedule is therefore a primary run plus cheap re-checks:
+
+| | When (America/New_York) | Does |
+|---|---|---|
+| `jobplatform-daily` | **09:00** | ingest, then enforce the freshness window |
+| `jobplatform-catchup` | 11:00, 13:00, 15:00, 17:00 | ingest **only if today's file is still missing** |
+
+A catch-up that finds the day already done costs one indexed query — no listing, no
+download. Install both timers on a server with `sudo ./scripts/install-systemd.sh`; run
+either by hand with `make daily` or `make catch-up`, and ask the question directly with
+`make have-today`. Full detail, including the cron equivalent:
+[`docs/07-deployment.md`](docs/07-deployment.md) §3.
 
 ---
 
@@ -102,19 +123,40 @@ docs/               source verification, architecture, milestones
 | 1 | Foundation: repo, Docker, Postgres, migrations, health API, CI | **Complete** |
 | 2 | Object storage + `SourceConnector` Protocol + sync tracking | **Complete** |
 | 3 | `OpenJobDataConnector`: discover, fetch, validate, normalize | **Complete** |
-| 4 | Parquet pipeline: Polars batches, rejects to `sync_errors` | Next |
-| 5 | `LocationNormalizer` + US classification | |
-| 6 | Deduplication L1–L4 | |
-| 7 | Lifecycle, `job_events`, `FreshnessService` | |
-| 8 | Full ingestion task, idempotency, crash recovery | |
-| 9 | FastAPI v1 read endpoints + cursor pagination | |
-| 10 | PostgreSQL search + `SearchService` abstraction | |
-| 11 | Next.js feed and job detail | |
-| 12 | Auth, saved jobs, saved searches | |
-| 13 | Alerts + notification outbox | |
-| 14 | Admin dashboard | |
-| 15 | Monitoring and alerting | |
-| 16 | Production deployment | |
+| 4 | Parquet pipeline: Polars batches, rejects to `sync_errors` | **Complete** |
+| 5 | `LocationNormalizer` + US classification | **Complete** |
+| 6 | Deduplication L1–L4 | **Complete** |
+| 7 | Lifecycle, `job_events`, `FreshnessService` | **Complete** |
+| 8 | Full ingestion task, idempotency, crash recovery | **Complete** ¹ |
+| 9 | FastAPI v1 read endpoints + cursor pagination | **Complete** |
+| 10 | PostgreSQL search + `SearchService` abstraction | **Complete** ² |
+| 11 | Next.js feed and job detail | **Complete** |
+| 12 | Auth, saved jobs, saved searches | Not started |
+| 13 | Alerts + notification outbox | Not started |
+| 14 | Admin dashboard | **Built, unauthenticated** ³ |
+| 15 | Monitoring and alerting | Not started |
+| 16 | Production deployment | Written, not yet run ⁴ |
+
+¹ Ingestion runs from `scripts/ingest.py` on a schedule, not as a Celery task —
+`ingestion/tasks/` is still a placeholder. Idempotency and crash recovery are built and
+tested: `job_sources (source, external_job_id)` is a database UNIQUE, and the stale
+`RUNNING` row a killed run leaves behind is reclaimed after 120 minutes.
+
+² Full-text search is real PostgreSQL — a `search_vector` column queried with
+`websearch_to_tsquery` and ranked with `ts_rank`. It lives in the read repository; there
+is no separate `SearchService` class yet, so swapping the engine would mean touching that
+repository.
+
+³ `/admin` and `/api/v1/admin/ingestion` expose ingestion aggregates. Both are public —
+they move behind the admin role when milestone 12 lands.
+
+⁴ Compose files, Dockerfiles, Caddy config and the systemd timers are all in the repo and
+statically validated, but have never been built or run: the development machine's Docker
+engine does not start. Treat the first deploy as the real test.
+
+Beyond the original list, role filtering and classification (category, seniority,
+industry) are built and documented in
+[`docs/06-role-filtering.md`](docs/06-role-filtering.md).
 
 Per-milestone detail: [`docs/02-milestone-1.md`](docs/02-milestone-1.md),
 [`docs/03-milestone-2.md`](docs/03-milestone-2.md),
