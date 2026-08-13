@@ -230,8 +230,9 @@ and count rows before trusting it.
 
 Stated so nobody assumes otherwise:
 
-- **No monitoring or alerting.** A failed cron writes to a log file nobody is watching.
-  Milestone 15.
+- **No monitoring or alerting.** A failed timer writes to the journal, and nothing reads
+  the journal. `systemctl list-timers 'jobplatform-*'` and `/admin` are the only places a
+  silent failure shows up, and both need a human to look. Milestone 15.
 - **No authentication.** `/admin` is public and exposes aggregates only. Milestone 12.
 - **Description HTML is not sanitised** — required before rendering source HTML.
 - **Single host, no redundancy.** Postgres, Redis and the app share one machine.
