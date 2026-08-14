@@ -67,6 +67,7 @@ log "subnet:   $SUBNET"
 log "shape:    $SHAPE  ${OCPUS} OCPU / ${MEMORY_GB} GB / ${BOOT_GB} GB boot"
 
 attempt=0
+consecutive_unknown=0
 while :; do
   for ad in "${ADS[@]}"; do
     attempt=$((attempt + 1))
@@ -96,14 +97,34 @@ while :; do
       exit 0
     fi
 
-    # Capacity is the expected failure and means "ask again later". Anything else is a
-    # real misconfiguration and retrying it just hides the message, so stop.
+    # Three classes of failure, and conflating them is what makes a retry loop useless.
+    #
+    #  * capacity  -- the expected answer; ask again later.
+    #  * transient -- endpoint timeouts, resets, throttling. Observed on a real run: AD-3
+    #                 timed out mid-sweep while AD-1 and AD-2 answered normally. Treating
+    #                 these as fatal ends an overnight wait on a blip.
+    #  * fatal     -- auth, bad parameters, service limits. Retrying cannot fix any of
+    #                 them and looping just buries the message.
     if echo "$out" | grep -qi 'out of host capacity\|out of capacity'; then
       log "  no capacity in $ad"
-    else
-      log "unexpected failure -- not a capacity problem, so not retrying:"
+      consecutive_unknown=0
+    elif echo "$out" | grep -qiE 'timed out|timeout|connection (reset|aborted|refused)|RequestException|TooManyRequests|ServiceUnavailable|InternalServerError|429|50[023]'; then
+      log "  transient error in $ad (will retry): $(echo "$out" | grep -ioE 'The connection to endpoint timed out|[A-Za-z]*(TimeoutError|ConnectionError|TooManyRequests)' | head -1)"
+      consecutive_unknown=0
+    elif echo "$out" | grep -qiE 'NotAuthenticated|NotAuthorized|InvalidParameter|LimitExceeded|QuotaExceeded|CannotParseRequest'; then
+      log "fatal -- retrying cannot fix this:"
       echo "$out" >&2
       exit 1
+    else
+      # Unrecognised. Do not exit on the first one: a novel transient error would end the
+      # wait. Do not loop forever either -- give up once it is clearly not going away.
+      consecutive_unknown=$((consecutive_unknown + 1))
+      log "  unrecognised failure in $ad ($consecutive_unknown/6):"
+      echo "$out" | head -12 >&2
+      if [ $consecutive_unknown -ge 6 ]; then
+        log "six unrecognised failures in a row -- stopping so the message is not buried"
+        exit 1
+      fi
     fi
   done
 
