@@ -15,6 +15,16 @@ import { formatNumber } from "@/lib/format";
 // collapses repeat calls; only the render moves to request time.
 export const dynamic = "force-dynamic";
 
+/**
+ * The role families this deployment keeps, in the order they are shown.
+ *
+ * INGEST_CATEGORY_ALLOWLIST already guarantees nothing else is stored, so this is
+ * about presentation order, not filtering -- but naming them here means the headline
+ * tiles stay meaningful if the allowlist ever widens, rather than silently showing
+ * whichever categories happen to sort first.
+ */
+const ROLES = ["software", "data-engineering"] as const;
+
 export default async function HomePage() {
   const [stats, latest, states, categories] = await Promise.all([
     api.stats(),
@@ -41,20 +51,30 @@ export default async function HomePage() {
           At a glance
         </h2>
         {/*
-          Each tile opens the exact rows it counted, which is why "Found today" travels
-          through stats.day_start and status=any: the counter spans every status and is
-          measured from the server's midnight, not the browser's.
+          Every tile counts ACTIVE jobs only, and opens exactly the rows it counted.
+          The two role tiles come from the category facets rather than a separate query,
+          so the headline figure and the filtered page can never disagree.
+
+          There is deliberately no "found today" tile. It counted every status, so on a
+          day with a large backfill it read 42,625 while the board held 6,132 -- a number
+          that was true and still told the visitor the wrong thing.
         */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <StatTile
-            label="Found today"
-            value={stats.detected_today}
-            tone="fresh"
-            href={`/jobs?seen_since=${encodeURIComponent(stats.day_start)}&status=any&sort=first_seen_desc`}
-          />
-          <StatTile label="Active jobs" value={stats.active_jobs} href="/jobs" />
+          {ROLES.map((slug) => {
+            const role = categories.find((c) => c.slug === slug);
+            if (!role) return null;
+            return (
+              <StatTile
+                key={slug}
+                label={role.name}
+                value={role.job_count}
+                tone="fresh"
+                href={`/jobs?category=${slug}`}
+              />
+            );
+          })}
+          <StatTile label="All active" value={stats.active_jobs} href="/jobs" />
           <StatTile label="Remote" value={stats.remote_jobs} href="/jobs?remote=REMOTE" />
-          <StatTile label="Companies" value={stats.companies} href="/companies" />
           <AppliedTile />
         </div>
       </section>

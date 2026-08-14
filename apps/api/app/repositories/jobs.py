@@ -225,7 +225,15 @@ class JobRepository:
                 -- The exact instant the "today" filters above were measured from. Exposed
                 -- so a client can drill into those counts on the same boundary instead of
                 -- guessing at it from its own clock and quietly disagreeing.
-                date_trunc('day', now())                                   AS day_start
+                date_trunc('day', now())                                   AS day_start,
+                -- When the data last actually changed, as opposed to when this response
+                -- was generated. A board that claims freshness has to be able to say when
+                -- it was last filled, and only a SUCCEEDED run counts: a failed or still
+                -- running one has not delivered anything yet.
+                (SELECT max(finished_at) FROM sync_runs
+                  WHERE status = 'SUCCEEDED')                              AS last_ingest_at,
+                (SELECT count(*) FROM sync_runs
+                  WHERE status = 'RUNNING')                                AS ingest_running
             FROM jobs
         """
         row = (await self._session.execute(text(sql))).mappings().one()

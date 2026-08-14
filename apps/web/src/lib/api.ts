@@ -134,6 +134,10 @@ export interface Stats {
    * the browser's own midnight is in a different timezone and would not agree.
    */
   day_start: string;
+  /** Most recent SUCCEEDED ingest. Null before the first one finishes. */
+  last_ingest_at: string | null;
+  /** Non-zero while an ingest is in flight. */
+  ingest_running: number;
   generated_at: string;
 }
 

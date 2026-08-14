@@ -112,6 +112,13 @@ class StatsResponse(BaseModel):
     companies: int
     #: Start of the server-local day the *_today counters were measured against.
     day_start: datetime
+    #: Finish time of the most recent SUCCEEDED ingest. None before the first one
+    #: completes. This is when the data last changed -- generated_at below is only
+    #: when this response was assembled, which says nothing about freshness.
+    last_ingest_at: datetime | None = None
+    #: Non-zero while an ingest is in flight, so the UI can say so rather than
+    #: showing a stale timestamp with no explanation.
+    ingest_running: int = 0
     generated_at: datetime
 
 

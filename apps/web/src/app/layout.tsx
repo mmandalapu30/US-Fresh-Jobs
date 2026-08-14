@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { DataFreshness } from "@/components/DataFreshness";
+
 import { AppliedNavLink } from "@/components/AppliedNavLink";
 import { AppliedProvider } from "@/components/AppliedProvider";
 
@@ -10,6 +12,10 @@ export const metadata: Metadata = {
   title: "US Fresh Jobs",
   description: "A continuously updated U.S. job data platform.",
 };
+
+// The freshness strip fetches, so this layout must render per request. Without this the
+// web image fails to build: `docker build` has no API to reach (docs/07 section 6).
+export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -38,6 +44,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </div>
             </nav>
           </header>
+
+          <DataFreshness />
 
           <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
 
