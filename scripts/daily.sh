@@ -105,13 +105,19 @@ if [ "$catch_up" = "1" ]; then
   exit 0
 fi
 
-# 2. Drop jobs past the freshness window, and trim old rejection records.
+# 2. Retire jobs past the freshness window, and trim old rejection records.
 #
-# Exit 2 means retention is switched off (RETENTION_MAX_POSTED_AGE_DAYS=0), the shipped
-# default and a legitimate choice for a platform whose rule is that jobs are never deleted,
-# only transitioned. Failing the run over it would report a failure after a good ingest.
+# --expire-only, not deletion. The platform's premise is that every qualifying job it has
+# ever seen is preserved; the UI filters on status, so marking a job EXPIRED takes it off
+# the board while keeping the record. Deleting would take the board and the history with
+# it, and the history is the part that cannot be re-fetched -- the source rewrites and
+# removes files. Pass --execute without --expire-only by hand if you genuinely want rows
+# gone.
+#
+# Exit 2 means retention is switched off (RETENTION_MAX_POSTED_AGE_DAYS=0, the shipped
+# default). Failing the run over it would report a failure after a perfectly good ingest.
 log "enforcing retention..."
-run_step scripts/enforce_retention.py --execute --yes
+run_step scripts/enforce_retention.py --execute --expire-only --yes
 code=$?
 if [ $code -eq 2 ]; then
   log "retention disabled (RETENTION_MAX_POSTED_AGE_DAYS=0) - skipped"
