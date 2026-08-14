@@ -36,8 +36,13 @@ SSH_KEY="$(cat "$SSH_KEY_FILE")"
 
 # ---- discover everything we can, so the only thing to configure is the CLI itself ----
 
-TENANCY="${TENANCY_OCID:-$(oci iam compartment list --query 'data[0]."compartment-id"' --raw-output 2>/dev/null)}"
-[ -n "$TENANCY" ] || die "could not determine the tenancy OCID -- is ~/.oci/config valid?"
+# Read the tenancy straight out of the CLI's own config. Deriving it from a compartment
+# listing needs a compartment to already exist and returns nothing on a fresh tenancy --
+# which then surfaces as an opaque InvalidParameter from the next call, not as a clear
+# error here.
+OCI_CONFIG="${OCI_CONFIG_FILE:-$HOME/.oci/config}"
+TENANCY="${TENANCY_OCID:-$(awk -F= '/^[[:space:]]*tenancy[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$OCI_CONFIG" 2>/dev/null)}"
+[ -n "$TENANCY" ] || die "no tenancy OCID in $OCI_CONFIG -- see infra/oracle/README.md step 4"
 log "tenancy:  $TENANCY"
 
 mapfile -t ADS < <(oci iam availability-domain list --compartment-id "$TENANCY" \
