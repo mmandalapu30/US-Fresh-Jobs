@@ -27,6 +27,10 @@ build/
 # node
 node_modules/
 .next/
+# TypeScript's incremental build cache. Machine-local and rewritten by every build,
+# so tracking it means a dirty tree after anyone compiles -- which the deploy script
+# refuses to build from.
+*.tsbuildinfo
 out/
 .turbo/
 
