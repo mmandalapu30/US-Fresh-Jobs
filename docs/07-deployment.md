@@ -226,23 +226,32 @@ Not configured by this stack — decide before you have data worth losing.
 A dump is not a backup until a restore has been tested. Restore into a scratch database
 and count rows before trusting it.
 
-**The raw archive grows without bound.** MinIO holds one ~120 MB source file per day
-with versioning on, so the `minio_data` volume gains roughly **44 GB a year** and
-nothing prunes it. Postgres is the system of record — the archive exists to re-run an
-ingest against a past day — so the cheap answer is a bucket lifecycle rule rather than a
-bigger disk:
+**The archive is currently empty, by omission rather than design.** `OpenJobDataConnector`
+implements `archive()` and prefers an archived copy over re-downloading, and both paths are
+tested — but the production entry point builds the connector as
+`OpenJobDataConnector(settings)` with no object store (`scripts/ingest.py`), and nothing in
+the pipeline calls `archive()`. So MinIO comes up, gets its bucket, and stores nothing. The
+ingest reads the source directly over HTTP range requests instead, which is why a run
+transfers far less than the ~120 MB the file weighs.
+
+Two consequences worth knowing before you size a disk:
+
+- **Storage growth is Postgres, not the archive.** Measured on the first run: 3 delta files
+  produced 2,098 jobs and a 40 MB database, with 0 bytes in the bucket.
+- **"What exactly did the source give us that day" is not answerable.** The publisher
+  rewrites and deletes files, and without the archive a past day cannot be reprocessed from
+  the original bytes. That is the capability the archive was for.
+
+MinIO is still required: `OBJECT_STORAGE_*` are mandatory settings, the access key and
+secret are covered by the production hardening check, and wiring archiving up later needs
+no infrastructure change. If you do enable it, one ~120 MB file per day is roughly 44 GB a
+year, and this caps it:
 
 ```bash
-# keep 90 days of raw files. Sets the alias first: the one `minio-init` created lives in
-# that container, not this one.
-docker exec jobplatform-minio sh -c   'mc alias set me http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
+docker exec jobplatform-minio sh -c \
+  'mc alias set me http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
    mc ilm rule add --expire-days 90 me/jobplatform-raw'
-
-# older mc builds spell it: mc ilm add --expiry-days 90 me/jobplatform-raw
 ```
-
-Confirm with `mc ilm rule ls me/jobplatform-raw`, and watch the volume with
-`docker system df -v | grep minio_data`.
 
 ---
 
