@@ -1,0 +1,104 @@
+# Build the production images in CI and publish them to GHCR.
+#
+# This exists because the target server cannot build them. A 1 GB always-free instance has
+# nowhere near the memory for `npm run build`, and adding swap to survive it would mean a
+# deploy that takes half an hour of thrashing. Building here and pulling there turns a
+# deploy on the server into a download.
+#
+# Uses the automatic GITHUB_TOKEN -- no personal access token to create, store or rotate.
+# Packages inherit the repository's visibility, so a public repo yields public images the
+# server can pull without credentials at all.
+
+name: Images
+
+on:
+  push:
+    branches: [US-DailyJobs, deploy/minio-and-worker-entrypoints]
+    paths:
+      # Only rebuild when something that lands in an image actually changed. Docs and
+      # infra scripts do not belong in this trigger.
+      - "apps/**"
+      - "packages/**"
+      - "workers/**"
+      - "database/**"
+      - "scripts/**"
+      - "infra/docker/**"
+      - ".dockerignore"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            dockerfile: infra/docker/api.Dockerfile
+          - image: web
+            dockerfile: infra/docker/web.Dockerfile
+          - image: ingest
+            dockerfile: infra/docker/worker.Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # amd64 and arm64 both, so the same tag runs on an x86 always-free instance or an
+      # ARM one without anybody remembering which is which. arm64 is emulated here and is
+      # the slow half of the build; the layer cache below absorbs most of it on reruns.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR rejects uppercase in an image path, and this repository is US-Fresh-Jobs.
+      # Lowercase it explicitly rather than relying on the tagging action to normalise.
+      - name: Lowercase the repository path
+        id: repo
+        run: echo "path=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.path }}/${{ matrix.image }}
+          # `sha-<commit>` is what a deploy pins to, so a rollback is a tag change rather
+          # than a rebuild. `latest` only follows the default branch.
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### ${{ matrix.image }}"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

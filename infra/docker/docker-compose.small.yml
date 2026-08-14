@@ -1,0 +1,110 @@
+# Overlay for a 1 GB always-free instance. Apply on top of the production file:
+#
+#   docker compose -f infra/docker/docker-compose.prod.yml \
+#                  -f infra/docker/docker-compose.small.yml \
+#                  --env-file .env.production up -d
+#
+# Three differences, each forced by the 1 GB ceiling:
+#
+#  * Images are PULLED, not built. `npm run build` alone needs more memory than this host
+#    has. .github/workflows/images.yml builds them and publishes to GHCR; here we only
+#    download. Set IMAGE_TAG to a `sha-<commit>` tag to pin a release, or leave it at
+#    latest.
+#
+#  * MinIO is not started. The ingest never writes to it -- the production entry point
+#    builds the connector without an object store and nothing calls archive() -- so a
+#    container holding ~100 MB to stay empty is the easiest 100 MB to reclaim. Storage
+#    points at a local path instead, which the storage layer supports natively via a
+#    file:// URL, so the configuration stays valid and wiring archiving up later is a
+#    one-line change back.
+#
+#  * Memory limits and Postgres are retuned. The production numbers assume 8 GB; here they
+#    add up to more than the machine has, and Docker would let them.
+#
+# Start the services explicitly so MinIO stays down -- an overlay cannot delete a service:
+#
+#   ... up -d postgres redis api web caddy
+
+services:
+  postgres:
+    # shared_buffers at the production 512MB would claim half the machine before a single
+    # connection. 128MB is the usual guidance for a host this size, and the working set
+    # here is small: roughly 7 MB of database per daily file.
+    command:
+      - postgres
+      - -c
+      - max_connections=40
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=384MB
+    deploy:
+      resources:
+        limits:
+          memory: 320M
+
+  redis:
+    # Celery is not running on this host, so Redis is a cache only and can be told to
+    # forget rather than to fail.
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru"]
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  api:
+    image: ghcr.io/mmandalapu30/us-fresh-jobs/api:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+    environment:
+      OBJECT_STORAGE_URL: file:///data/archive
+      OBJECT_STORAGE_USE_SSL: "false"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  web:
+    image: ghcr.io/mmandalapu30/us-fresh-jobs/web:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+
+  caddy:
+    deploy:
+      resources:
+        limits:
+          memory: 48M
+
+  ingest:
+    image: ghcr.io/mmandalapu30/us-fresh-jobs/ingest:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+    # The archive volume is shared with the api so a file:// store is coherent across both,
+    # even though nothing writes to it today.
+    volumes:
+      - archive_data:/data/archive
+    environment:
+      OBJECT_STORAGE_URL: file:///data/archive
+      OBJECT_STORAGE_USE_SSL: "false"
+      # Parquet reads are the memory peak on this host. One row group at a time, one
+      # thread, so a daily run cannot take the machine down with it.
+      INGEST_ROW_GROUP_BATCH_SIZE: "2"
+      OMP_NUM_THREADS: "1"
+    depends_on: !reset
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+
+volumes:
+  archive_data:
