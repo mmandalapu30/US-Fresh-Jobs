@@ -1,6 +1,5 @@
 import Link from "next/link";
 
-import { CategoryFilter } from "@/components/CategoryFilter";
 import { Filters } from "@/components/Filters";
 import { JobCard } from "@/components/JobCard";
 import { api } from "@/lib/api";
@@ -53,7 +52,7 @@ export default async function JobsPage({ searchParams }: { searchParams: Search 
   const selectedSeniorities = many("seniority");
   const selectedIndustries = many("industry");
 
-  const [page, states, categories, seniorities, industries] = await Promise.all([
+  const [page, states, categories] = await Promise.all([
     api.jobs({
       state: current.state,
       remote: current.remote,
@@ -69,11 +68,10 @@ export default async function JobsPage({ searchParams }: { searchParams: Search 
       limit: 20,
     }),
     api.stateCounts(),
-    // Facet counts respect the location/remote filters so the numbers describe the
-    // view the user is actually looking at.
+    // Only the category names are still needed, to render the active-filter line. The
+    // seniority and industry counts went with the chip panel -- two fewer API calls on
+    // every page load.
     api.categories({ state: current.state, remote: current.remote }),
-    api.seniorityLevels({ state: current.state, category: selectedCategories }),
-    api.industries({ state: current.state, category: selectedCategories, limit: 20 }),
   ]);
 
   /** Build a URL preserving current filters, with a patch applied. */
@@ -139,26 +137,17 @@ export default async function JobsPage({ searchParams }: { searchParams: Search 
               {current.state ? ` in ${current.state}` : ""}
             </>
           ) : (
-            "Filter by role type and level below."
+            "Newest first. Narrow by location, remote or role using the controls below."
           )}
         </p>
-        {current.company_id || current.seen_since || current.status ? (
+        {current.company_id ||
+        current.seen_since ||
+        current.status ||
+        activeLabels.length > 0 ? (
           <Link href="/jobs" className="mt-2 inline-block text-sm text-blue-600 hover:underline">
             ← All jobs
           </Link>
         ) : null}
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-        <CategoryFilter
-          categories={categories}
-          seniorities={seniorities}
-          industries={industries}
-          selectedCategories={selectedCategories}
-          selectedSeniorities={selectedSeniorities}
-          selectedIndustries={selectedIndustries}
-          buildHref={buildHref}
-        />
       </div>
 
       <Filters
@@ -190,7 +179,13 @@ export default async function JobsPage({ searchParams }: { searchParams: Search 
             )}
           </p>
         ) : (
-          page.items.map((job) => <JobCard key={job.id} job={job} />)
+          page.items.map((job) => (
+            <JobCard
+              key={job.id}
+              job={job}
+              categoryHref={(slug) => buildHref({ category: [slug] })}
+            />
+          ))
         )}
       </div>
 

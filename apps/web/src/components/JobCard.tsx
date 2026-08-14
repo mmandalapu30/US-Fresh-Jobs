@@ -23,10 +23,18 @@ const TONE: Record<string, string> = {
 export function JobCard({
   job,
   hideWhenApplied = true,
+  categoryHref,
 }: {
   job: JobSummary;
   /** False on the applied list, which would otherwise hide every card it renders. */
   hideWhenApplied?: boolean;
+  /**
+   * How the category chip should link. The default discards any filters already applied,
+   * which is right on the home page and on search -- there is nothing to keep -- but wrong
+   * on /jobs, where it silently dropped the state, remote, sort and seen_since the visitor
+   * had chosen. That page passes a builder that preserves them.
+   */
+  categoryHref?: (slug: string) => string;
 }) {
   const salary = formatSalary(job);
   const posted = postedLabel(job);
@@ -115,7 +123,11 @@ export function JobCard({
           <div className="flex items-center gap-2">
             {job.category_slug && job.category_slug !== "other" ? (
               <Link
-                href={`/jobs?category=${job.category_slug}`}
+                href={
+                  categoryHref
+                    ? categoryHref(job.category_slug)
+                    : `/jobs?category=${job.category_slug}`
+                }
                 className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600 transition hover:bg-blue-100 hover:text-blue-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-blue-950"
               >
                 {job.category_slug}
