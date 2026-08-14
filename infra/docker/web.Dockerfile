@@ -46,7 +46,11 @@ COPY --from=builder --chown=nextjs:nodejs /build/.next/static ./.next/static
 USER nextjs
 EXPOSE 3100
 
+# 127.0.0.1, not localhost. Next binds IPv4 only (HOSTNAME=0.0.0.0) while `localhost`
+# also resolves to ::1 -- and busybox wget tries ::1 and gives up, rather than falling
+# back to IPv4 the way curl does. With `localhost` this check failed in ~20ms every run,
+# leaving a container that served traffic perfectly while reporting unhealthy forever.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD wget -qO- http://localhost:3100/ >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:3100/ >/dev/null 2>&1 || exit 1
 
 CMD ["node", "server.js"]
