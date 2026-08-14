@@ -18,8 +18,12 @@ set -uo pipefail
 
 INTERVAL="${INTERVAL:-300}"
 DISPLAY_NAME="${DISPLAY_NAME:-jobplatform}"
-OCPUS="${OCPUS:-2}"
-MEMORY_GB="${MEMORY_GB:-12}"
+# A ladder, largest first. Capacity is fragmented: a host with no room for 4 OCPU often
+# has room for 1, so asking for a single fixed size refuses capacity that exists. Every
+# rung sits inside the Always Free allocation (4 OCPU / 24 GB of A1), so none of them
+# starts billing -- and a small instance that landed can be resized later, whereas an
+# instance that never launched cannot.
+SHAPE_LADDER="${SHAPE_LADDER:-4:24 2:12 1:6}"
 BOOT_GB="${BOOT_GB:-150}"
 SHAPE="VM.Standard.A1.Flex"
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/oracle_jobplatform.pub}"
@@ -64,14 +68,16 @@ SUBNET="${SUBNET_OCID:-$(oci network subnet list --compartment-id "$TENANCY" \
 [ -n "$SUBNET" ] && [ "$SUBNET" != "null" ] || die \
   "no subnet found. Create a VCN first: Networking > Virtual Cloud Networks > Start VCN Wizard"
 log "subnet:   $SUBNET"
-log "shape:    $SHAPE  ${OCPUS} OCPU / ${MEMORY_GB} GB / ${BOOT_GB} GB boot"
+log "shape:    $SHAPE  ladder [$SHAPE_LADDER]  ${BOOT_GB} GB boot"
 
 attempt=0
 consecutive_unknown=0
 while :; do
   for ad in "${ADS[@]}"; do
+   for rung in $SHAPE_LADDER; do
+    OCPUS="${rung%%:*}"; MEMORY_GB="${rung##*:}"
     attempt=$((attempt + 1))
-    log "attempt $attempt in $ad ..."
+    log "attempt $attempt in $ad  (${OCPUS} OCPU / ${MEMORY_GB} GB) ..."
 
     out=$(oci compute instance launch \
       --availability-domain "$ad" \
@@ -89,7 +95,7 @@ while :; do
 
     if [ $code -eq 0 ]; then
       id=$(echo "$out" | grep -o '"id": "[^"]*"' | head -1 | cut -d'"' -f4)
-      log "GRANTED -- instance $id is RUNNING"
+      log "GRANTED -- instance $id is RUNNING (${OCPUS} OCPU / ${MEMORY_GB} GB)"
       ip=$(oci compute instance list-vnics --instance-id "$id" \
              --query 'data[0]."public-ip"' --raw-output 2>/dev/null)
       log "public IP: $ip"
@@ -106,7 +112,7 @@ while :; do
     #  * fatal     -- auth, bad parameters, service limits. Retrying cannot fix any of
     #                 them and looping just buries the message.
     if echo "$out" | grep -qi 'out of host capacity\|out of capacity'; then
-      log "  no capacity in $ad"
+      log "  no capacity in $ad at ${OCPUS} OCPU / ${MEMORY_GB} GB"
       consecutive_unknown=0
     elif echo "$out" | grep -qiE 'timed out|timeout|connection (reset|aborted|refused)|RequestException|TooManyRequests|ServiceUnavailable|InternalServerError|429|50[023]'; then
       log "  transient error in $ad (will retry): $(echo "$out" | grep -ioE 'The connection to endpoint timed out|[A-Za-z]*(TimeoutError|ConnectionError|TooManyRequests)' | head -1)"
@@ -126,6 +132,7 @@ while :; do
         exit 1
       fi
     fi
+   done
   done
 
   [ $once -eq 1 ] && { log "--once given, stopping after one pass"; exit 2; }
