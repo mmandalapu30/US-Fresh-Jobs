@@ -19,6 +19,13 @@
 set -uo pipefail
 
 COMPOSE_FILE="infra/docker/docker-compose.prod.yml"
+
+# Per-host deployment settings, untracked, written once when the host is set up.
+# A host running from prebuilt images sets COMPOSE_OVERLAY and IMAGE_TAG here, so that
+# `./infra/deploy/deploy.sh` with no arguments does the right thing rather than depending
+# on whoever runs it remembering to export two variables.
+[ -f ./.deploy.conf ] && . ./.deploy.conf
+COMPOSE_OVERLAY="${COMPOSE_OVERLAY:-}"
 ENV_FILE=".env.production"
 HEALTH_URL="${HEALTH_URL:-http://localhost/}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
@@ -41,7 +48,10 @@ ts()  { date -u '+%Y-%m-%d %H:%M:%S UTC'; }
 log() { echo "$(ts)  $*" | tee -a "$LOG" 2>/dev/null || echo "$(ts)  $*"; }
 die() { log "FAILED: $*"; exit 1; }
 
-C="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE"
+COMPOSE_ARGS="-f $COMPOSE_FILE"
+[ -n "$COMPOSE_OVERLAY" ] && COMPOSE_ARGS="$COMPOSE_ARGS -f $COMPOSE_OVERLAY"
+# shellcheck disable=SC2086  # a list of arguments, not one argument
+C="docker compose $COMPOSE_ARGS --env-file $ENV_FILE"
 
 [ -f "$COMPOSE_FILE" ] || die "run this from the repo root ($COMPOSE_FILE not found)"
 [ -f "$ENV_FILE" ]     || die "$ENV_FILE is missing -- see docs/07-deployment.md section 2"
@@ -127,8 +137,15 @@ fi
 log "now at $(git rev-parse --short HEAD)"
 
 # ---------------------------------------------------------------------------------------
-log "--- building ---"
-$C build || die "build failed -- nothing was replaced, the old stack is still serving"
+if [ -n "$COMPOSE_OVERLAY" ]; then
+  # This host runs published images. Building here would ignore what CI produced and,
+  # on a small box, may not fit in memory at all.
+  log "--- pulling images (tag ${IMAGE_TAG:-latest}) ---"
+  $C pull || die "pull failed -- is the image published for tag ${IMAGE_TAG:-latest}?"
+else
+  log "--- building ---"
+  $C build || die "build failed -- nothing was replaced, the old stack is still serving"
+fi
 
 if [ -n "$migrations" ]; then
   log "--- applying migrations ---"

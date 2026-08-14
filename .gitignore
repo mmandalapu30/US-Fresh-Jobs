@@ -46,3 +46,6 @@ scratch/
 .DS_Store
 Thumbs.db
 .idea/
+
+# Per-host deploy settings (overlay, image tag). Machine-specific, never shared.
+.deploy.conf
