@@ -98,6 +98,17 @@ for unit in "${UNITS[@]}"; do
                  -e "s|^ExecStart=[^ ]*/scripts/daily.sh|ExecStart=$REPO/scripts/daily.sh|" \
                  -e "s|^Documentation=file://.*|Documentation=file://$REPO/docs/07-deployment.md|" \
                  "$UNIT_SRC/$unit")
+
+  # A host running from prebuilt images needs the overlay and the image tag in the unit
+  # too, or the scheduled run rebuilds from source every night instead of pulling. Detect
+  # it from the deployment rather than asking: if the small overlay is what is deployed,
+  # .env.production sits beside it and the branch is what CI tagged the images with.
+  if [ -f "$REPO/infra/docker/docker-compose.small.yml" ] && [ -n "${COMPOSE_OVERLAY:-}" ]; then
+    tag="${IMAGE_TAG:-$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null | tr "/" "-")}"
+    rendered=$(printf %s "$rendered" | sed -e "s|^Environment=COMPOSE=1|Environment=COMPOSE=1
+Environment=COMPOSE_OVERLAY=$COMPOSE_OVERLAY
+Environment=IMAGE_TAG=$tag|")
+  fi
   if [ "$dry_run" -eq 1 ]; then
     echo "===== $UNIT_DIR/$unit ====="
     echo "$rendered"

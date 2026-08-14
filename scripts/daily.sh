@@ -38,9 +38,24 @@ label="daily"
 log() { echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')  $*"; }
 
 COMPOSE_FILE="infra/docker/docker-compose.prod.yml"
+
+# An optional overlay applied on top of the production file. A host running the stack
+# from prebuilt images needs it here too: without it this script sees only the production
+# file, where the ingest service carries a `build:` and no `image:` -- so every scheduled
+# run rebuilds from source instead of pulling what CI already published. Observed doing
+# exactly that on the first deploy. Set COMPOSE_OVERLAY in the unit file on such a host.
+COMPOSE_OVERLAY="${COMPOSE_OVERLAY:-}"
+compose_args() {
+  printf %s "-f $COMPOSE_FILE"
+  [ -n "$COMPOSE_OVERLAY" ] && printf %s " -f $COMPOSE_OVERLAY"
+  return 0
+}
+
 run_step() {
   if [ "${COMPOSE:-0}" = "1" ]; then
-    docker compose -f "$COMPOSE_FILE" --env-file .env.production \
+    # Unquoted deliberately: this expands to a list of arguments, not a single one.
+    # shellcheck disable=SC2046
+    docker compose $(compose_args) --env-file .env.production \
       run --rm --no-deps ingest python "$@"
   else
     python "$@"
