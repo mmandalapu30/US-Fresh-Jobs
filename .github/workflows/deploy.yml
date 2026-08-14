@@ -1,0 +1,107 @@
+# Deploy to the production server over SSH.
+#
+# Deliberately NOT triggered by a bare push. It waits for CI to pass on the branch and
+# then deploys, so a commit that fails lint, tests, the layering guard or the secret scan
+# never reaches the server. `workflow_dispatch` covers deploying a specific tag by hand,
+# and re-running a deploy after fixing something on the server itself.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#
+#   SSH_HOST         the server's public IP or hostname
+#   SSH_USER         the login user (ubuntu on Oracle's images)
+#   SSH_PRIVATE_KEY  the private half of the key the instance was created with
+#   SSH_PORT         optional, defaults to 22
+#
+# The deploy itself is infra/deploy/deploy.sh on the server -- this workflow only decides
+# when to run it. Keeping the logic there means a deploy can always be run by hand, over
+# SSH, with no dependency on GitHub being reachable.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [US-DailyJobs]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to deploy (blank = branch tip)"
+        required: false
+        type: string
+      check_only:
+        description: "Show what would change, then stop"
+        required: false
+        type: boolean
+        default: false
+
+# One deploy at a time. Two overlapping runs would race each other over the same working
+# tree and image tags, and the rollback tags would end up pointing at the wrong release.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    # On the workflow_run path, only proceed if CI actually succeeded. Without this the
+    # deploy would fire on a failed CI run too, which defeats the point of gating on it.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    environment:
+      name: production
+      url: ${{ vars.SITE_URL }}
+
+    steps:
+      - name: Check required secrets are present
+        run: |
+          missing=""
+          [ -n "${{ secrets.SSH_HOST }}" ]        || missing="$missing SSH_HOST"
+          [ -n "${{ secrets.SSH_USER }}" ]        || missing="$missing SSH_USER"
+          [ -n "${{ secrets.SSH_PRIVATE_KEY }}" ] || missing="$missing SSH_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::missing repository secrets:$missing"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key on first contact rather than disabling checking outright.
+          ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" -H "${{ secrets.SSH_HOST }}" \
+            >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy
+        env:
+          REF: ${{ inputs.ref }}
+          CHECK: ${{ inputs.check_only }}
+        run: |
+          args=""
+          [ -n "$REF" ] && args="$args --ref $REF"
+          [ "$CHECK" = "true" ] && args="$args --check"
+          ssh -i ~/.ssh/deploy_key \
+              -p "${{ secrets.SSH_PORT || 22 }}" \
+              -o BatchMode=yes \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              "cd /srv/job-platform && ./infra/deploy/deploy.sh $args"
+
+      - name: Report outcome
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Deploy failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The script rolls the containers back on its own when the new release" >> "$GITHUB_STEP_SUMMARY"
+            echo "does not become healthy. Check the server:" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo 'tail -50 /var/log/jobplatform-deploy.log' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "A migration that was applied is **not** undone by rollback." >> "$GITHUB_STEP_SUMMARY"
+          fi
