@@ -76,14 +76,23 @@ cd "$DIR" || die "cannot enter $DIR"
 echo "  $(git log --oneline -1)"
 
 # ---------------------------------------------------------------------------------------
-# Pin the tag to this exact commit rather than following `latest`. `latest` is only
-# published from the default branch, so on any other branch it either does not exist or
-# points at something else entirely -- and pinning means the running containers and the
-# checked-out source always describe the same build.
-SHA="$(git rev-parse HEAD)"
+# Which image tag to run.
+#
+# Not `latest`: that is only published from the default branch, so on any other branch it
+# either does not exist -- confirmed, the api image 404s on it -- or points at something
+# else entirely.
+#
+# Not sha-<commit> by default either, tempting as it is. Images are only rebuilt when a
+# path that lands in one changes, so a commit touching only deploy scripts or docs has no
+# image of its own and pinning to its sha pulls a tag that will never exist. The branch
+# tag always resolves to the most recent build of this branch, which is the right image
+# for any commit that did not itself produce one.
+#
+# Pass IMAGE_TAG=sha-<commit> explicitly to pin a specific build, which is what a rollback
+# does.
 BRANCH_TAG="$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
-export IMAGE_TAG="${IMAGE_TAG:-sha-$SHA}"
-echo "  image tag: $IMAGE_TAG"
+export IMAGE_TAG="${IMAGE_TAG:-$BRANCH_TAG}"
+echo "  image tag: $IMAGE_TAG  (commit $(git rev-parse --short HEAD))"
 
 log "6/9  configuration"
 if [ -f .env.production ]; then
@@ -103,8 +112,7 @@ else
     -e "s|^INGEST_CATEGORY_ALLOWLIST=.*|INGEST_CATEGORY_ALLOWLIST=data-engineering,software|" \
     .env.production
   chmod 600 .env.production
-  grep -qE '^[A-Z_]+=.*(CHANGE_ME|REPLACE-WITH)' .env.production \
-    && die "placeholders survived generation" || echo "  secrets generated"
+  echo "  secrets generated"
 fi
 
 # SITE_ADDRESS and CORS have to agree, and CORS must be https or the API refuses to boot.
@@ -117,6 +125,16 @@ else
          -e "s|^CORS_ALLOW_ORIGINS=.*|CORS_ALLOW_ORIGINS=https://localhost|" .env.production
   echo "  serving plain HTTP on :80 (no SITE given)"
 fi
+
+# Checked here, not inside the secrets block: SITE_ADDRESS and CORS_ALLOW_ORIGINS are
+# substituted above, so validating earlier failed on the two values it was about to
+# replace -- and reported it as "placeholders survived generation", which pointed at
+# the wrong step entirely.
+if leftover=$(grep -nE '^[A-Z_]+=.*(CHANGE_ME|REPLACE-WITH)' .env.production); then
+  echo "$leftover"
+  die "placeholders remain in .env.production after substitution"
+fi
+echo "  configuration validated"
 
 C="docker compose -f infra/docker/docker-compose.prod.yml -f infra/docker/docker-compose.small.yml --env-file .env.production"
 
