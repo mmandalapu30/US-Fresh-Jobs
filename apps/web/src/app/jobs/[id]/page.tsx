@@ -160,29 +160,6 @@ export default async function JobDetailPage({
         <p className="text-sm text-slate-500">No description provided by the source.</p>
       )}
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Provenance
-        </h2>
-        <dl className="grid gap-2 sm:grid-cols-2">
-          <div className="flex justify-between gap-4">
-            <dt className="text-slate-500">Source</dt>
-            <dd className="font-medium">{job.source}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-slate-500">Sources describing this job</dt>
-            <dd className="font-medium">{job.source_count}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-slate-500">Source fetched at</dt>
-            <dd>{absoluteTime(job.source_fetched_at)}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-slate-500">Status</dt>
-            <dd className="font-medium">{job.status}</dd>
-          </div>
-        </dl>
-      </section>
     </article>
   );
 }
