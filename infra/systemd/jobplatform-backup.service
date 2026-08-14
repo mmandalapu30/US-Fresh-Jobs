@@ -1,0 +1,14 @@
+[Unit]
+Description=US Fresh Jobs — nightly database backup
+Documentation=file:///srv/job-platform/docs/07-deployment.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/job-platform
+ExecStart=/srv/job-platform/infra/backup/backup.sh
+# Keep two weeks. Small dumps -- measured at roughly 7 MB of database per daily file --
+# so retention costs far less than the disk it protects.
+Environment=BACKUP_KEEP_DAYS=14
+Environment=BACKUP_DIR=/var/backups/jobplatform

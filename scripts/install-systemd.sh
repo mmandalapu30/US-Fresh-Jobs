@@ -19,8 +19,11 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNIT_SRC="$REPO/infra/systemd"
 UNIT_DIR="/etc/systemd/system"
 UNITS=(jobplatform-daily.service jobplatform-daily.timer
-       jobplatform-catchup.service jobplatform-catchup.timer)
-TIMERS=(jobplatform-daily.timer jobplatform-catchup.timer)
+       jobplatform-catchup.service jobplatform-catchup.timer
+       jobplatform-backup.service jobplatform-backup.timer
+       jobplatform-freshness.service jobplatform-freshness.timer)
+TIMERS=(jobplatform-daily.timer jobplatform-catchup.timer
+        jobplatform-backup.timer jobplatform-freshness.timer)
 
 remove=0
 dry_run=0
@@ -96,6 +99,7 @@ for unit in "${UNITS[@]}"; do
   # directives so the units are correct wherever this checkout actually lives.
   rendered=$(sed -e "s|^WorkingDirectory=.*|WorkingDirectory=$REPO|" \
                  -e "s|^ExecStart=[^ ]*/scripts/daily.sh|ExecStart=$REPO/scripts/daily.sh|" \
+                 -e "s|^ExecStart=[^ ]*/infra/backup/|ExecStart=$REPO/infra/backup/|" \
                  -e "s|^Documentation=file://.*|Documentation=file://$REPO/docs/07-deployment.md|" \
                  "$UNIT_SRC/$unit")
 
@@ -103,7 +107,11 @@ for unit in "${UNITS[@]}"; do
   # too, or the scheduled run rebuilds from source nightly instead of pulling. Written as
   # a drop-in rather than edited into the unit: systemd merges drop-ins itself, so the
   # tracked template stays the tracked template and an upgrade cannot silently drop this.
-  if [ -n "${COMPOSE_OVERLAY:-}" ]; then
+  # Only the ingest units drive compose; backup and freshness talk to the running
+  # postgres container directly and would gain nothing from the overlay.
+  needs_overlay=0
+  case "$unit" in jobplatform-daily.service|jobplatform-catchup.service) needs_overlay=1 ;; esac
+  if [ "$needs_overlay" -eq 1 ] && [ -n "${COMPOSE_OVERLAY:-}" ]; then
     dropin="$UNIT_DIR/${unit}.d"
     tag="${IMAGE_TAG:-$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null | tr "/" "-")}"
     if [ "$dry_run" -eq 1 ]; then

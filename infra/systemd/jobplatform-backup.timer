@@ -1,0 +1,12 @@
+[Unit]
+Description=US Fresh Jobs — nightly database backup
+
+[Timer]
+# 04:00, well clear of the 09:00 ingest and its afternoon catch-ups, so a dump is never
+# taken mid-write and never competes with one for the disk.
+OnCalendar=*-*-* 04:00:00 America/New_York
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

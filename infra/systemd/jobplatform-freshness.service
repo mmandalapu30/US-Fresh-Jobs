@@ -1,0 +1,15 @@
+[Unit]
+Description=US Fresh Jobs — is the board still being fed?
+Documentation=file:///srv/job-platform/docs/07-deployment.md
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/job-platform
+ExecStart=/srv/job-platform/infra/backup/check-freshness.sh
+# 26h, not 24: the publisher's upload hour moves across ~06:33-14:15 UTC, so two runs can
+# legitimately sit more than a day apart. Alerting at 24 would fire on a normal week.
+Environment=MAX_AGE_HOURS=26
+# Set ALERT_WEBHOOK to a JSON-accepting endpoint (Slack, Discord, ntfy) to be told rather
+# than having to look. Unset, a failure still surfaces in `systemctl --failed`.
+#Environment=ALERT_WEBHOOK=https://

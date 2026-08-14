@@ -1,0 +1,11 @@
+[Unit]
+Description=US Fresh Jobs — freshness check
+
+[Timer]
+# 18:00, an hour after the last catch-up. By then a healthy day has certainly ingested, so
+# anything still stale is genuinely worth knowing about rather than merely early.
+OnCalendar=*-*-* 18:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
