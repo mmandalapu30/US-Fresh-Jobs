@@ -27,8 +27,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Tests legitimately use asserts and hardcoded credentials against throwaway databases.
-"**/tests/**" = ["S101", "S105", "S106", "S311"]
-"tests/**"    = ["S101", "S105", "S106", "S311"]
+"**/tests/**" = ["S101", "S105", "S106", "S107", "S311"]
+"tests/**"    = ["S101", "S105", "S106", "S107", "S311"]
 "scripts/**"  = ["T20"]          # scripts are CLI tools; printing is the point
 
 [tool.ruff.lint.isort]

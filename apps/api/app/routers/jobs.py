@@ -27,6 +27,8 @@ from jobplatform_shared import get_settings
 from jobplatform_shared.db import get_db
 from jobplatform_shared.time import hours_ago, utc_now
 
+# Authorization lives in one place; these routes only say which guard applies.
+from ..core.deps import require_admin, require_approved
 from ..repositories.jobs import SORT_OPTIONS, JobFilters, JobRepository
 
 router = APIRouter()
@@ -206,7 +208,9 @@ def _parse_cursor(raw: str | None, sort: str) -> Cursor | None:
 # ------------------------------------------------------------------------- routes
 
 
-@router.get("/jobs", response_model=JobPage, summary="List jobs")
+@router.get(
+    "/jobs", response_model=JobPage, summary="List jobs", dependencies=[Depends(require_approved)]
+)
 async def list_jobs(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -292,7 +296,12 @@ async def list_jobs(
     return _page(rows, has_more, sort, limit)
 
 
-@router.get("/jobs/latest", response_model=JobPage, summary="Newest detected jobs")
+@router.get(
+    "/jobs/latest",
+    response_model=JobPage,
+    summary="Newest detected jobs",
+    dependencies=[Depends(require_approved)],
+)
 async def latest_jobs(
     session: Annotated[AsyncSession, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
@@ -313,7 +322,12 @@ async def latest_jobs(
     return _page(rows, has_more, "first_seen_desc", limit)
 
 
-@router.get("/jobs/today", response_model=JobPage, summary="Posted today")
+@router.get(
+    "/jobs/today",
+    response_model=JobPage,
+    summary="Posted today",
+    dependencies=[Depends(require_approved)],
+)
 async def jobs_today(
     session: Annotated[AsyncSession, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
@@ -335,7 +349,12 @@ async def jobs_today(
     return _page(rows, has_more, "posted_at_desc", limit)
 
 
-@router.get("/jobs/recent", response_model=JobPage, summary="Posted in the last N hours")
+@router.get(
+    "/jobs/recent",
+    response_model=JobPage,
+    summary="Posted in the last N hours",
+    dependencies=[Depends(require_approved)],
+)
 async def jobs_recent(
     session: Annotated[AsyncSession, Depends(get_db)],
     hours: Annotated[int, Query(ge=1, le=168)] = 24,
@@ -352,7 +371,12 @@ async def jobs_recent(
     return _page(rows, has_more, "posted_at_desc", limit)
 
 
-@router.get("/jobs/{job_id}", response_model=JobDetail, summary="Job detail")
+@router.get(
+    "/jobs/{job_id}",
+    response_model=JobDetail,
+    summary="Job detail",
+    dependencies=[Depends(require_approved)],
+)
 async def get_job(
     job_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -364,7 +388,12 @@ async def get_job(
     return JobDetail(**row, freshness=_freshness(row, utc_now()))
 
 
-@router.get("/search", response_model=JobPage, summary="Full-text search")
+@router.get(
+    "/search",
+    response_model=JobPage,
+    summary="Full-text search",
+    dependencies=[Depends(require_approved)],
+)
 async def search_jobs(
     session: Annotated[AsyncSession, Depends(get_db)],
     q: Annotated[str, Query(min_length=1, max_length=200)],
@@ -459,7 +488,7 @@ async def state_counts(session: Annotated[AsyncSession, Depends(get_db)]) -> lis
     return await JobRepository(session).by_state()
 
 
-@router.get("/companies", summary="Employer directory")
+@router.get("/companies", summary="Employer directory", dependencies=[Depends(require_approved)])
 async def companies(
     session: Annotated[AsyncSession, Depends(get_db)],
     q: Annotated[str | None, Query(max_length=100, description="Filter by company name")] = None,
@@ -475,7 +504,7 @@ async def companies(
     return {"items": items, "total": total}
 
 
-@router.get("/admin/ingestion", summary="Ingestion health")
+@router.get("/admin/ingestion", summary="Ingestion health", dependencies=[Depends(require_admin)])
 async def ingestion_health(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:

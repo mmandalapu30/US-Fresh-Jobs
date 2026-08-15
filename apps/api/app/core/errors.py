@@ -39,6 +39,23 @@ def _payload(
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    from .deps import AuthError
+
+    @app.exception_handler(AuthError)
+    async def _auth_error(request: Request, exc: AuthError) -> JSONResponse:
+        """Authentication and authorization refusals.
+
+        Handled here rather than raised as HTTPException so every refusal carries the same
+        body shape as the rest of the API, and so a 401 can set WWW-Authenticate without
+        each call site remembering to.
+        """
+        headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_payload(exc.code, exc.message, request),
+            headers=headers,
+        )
+
     @app.exception_handler(JobPlatformError)
     async def _domain_error(request: Request, exc: JobPlatformError) -> JSONResponse:
         logger.warning("api.domain_error", code=exc.code, message=exc.message, **exc.context)
