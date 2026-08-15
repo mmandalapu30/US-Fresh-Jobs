@@ -1,5 +1,6 @@
 import Link from "next/link";
-
+
+import { getCurrentUser, isApproved } from "@/lib/session";
 import { AppliedTile } from "@/components/AppliedTile";
 import { JobCard } from "@/components/JobCard";
 import { StatTile } from "@/components/StatTile";
@@ -26,12 +27,21 @@ export const dynamic = "force-dynamic";
 const ROLES = ["software", "data-engineering"] as const;
 
 export default async function HomePage() {
-  const [stats, latest, states, categories] = await Promise.all([
+  // The landing page is public, so it must render for someone with no session at all.
+  // Counts and categories are public; the job feed is not, and asking for it anonymously
+  // now returns 401. Fetch it only for those allowed to see it, and let a failure fall
+  // back to the signed-out view rather than breaking the page.
+  const user = await getCurrentUser();
+  const approved = isApproved(user);
+
+  const [stats, states, categories] = await Promise.all([
     api.stats(),
-    api.latest({ limit: 8 }),
     api.stateCounts(),
     api.categories(),
   ]);
+  const latest = approved
+    ? await api.latest({ limit: 8 }).catch(() => null)
+    : null;
 
   const topStates = states.slice(0, 12);
 
@@ -136,19 +146,48 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section>
-        <div className="mb-4 flex items-baseline justify-between">
-          <h2 className="text-xl font-semibold">Newest to our platform</h2>
-          <Link href="/jobs" className="text-sm font-medium text-blue-600 hover:underline">
-            Browse all →
-          </Link>
-        </div>
-        <div className="grid gap-3">
-          {latest.items.map((job) => (
-            <JobCard key={job.id} job={job} />
-          ))}
-        </div>
-      </section>
+      {/* The feed itself is the members-only part. Anonymous visitors see what the board
+          holds and how to ask for access -- never the postings. */}
+      {latest ? (
+        <section>
+          <div className="mb-4 flex items-baseline justify-between">
+            <h2 className="text-xl font-semibold">Newest to our platform</h2>
+            <Link href="/jobs" className="text-sm font-medium text-blue-600 hover:underline">
+              Browse all →
+            </Link>
+          </div>
+          <div className="grid gap-3">
+            {latest.items.map((job) => (
+              <JobCard key={job.id} job={job} />
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="rounded-xl border border-slate-200 bg-white p-8 text-center dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="text-xl font-semibold">Job listings require an approved account</h2>
+          <p className="mx-auto mt-2 max-w-lg text-sm text-slate-600 dark:text-slate-400">
+            {user
+              ? "Your account is awaiting administrator approval. You will get access once it is reviewed."
+              : "Request access and an administrator will review your account. Approval unlocks the full board, search and employer directory."}
+          </p>
+          <div className="mt-6 flex justify-center gap-3">
+            {user ? (
+              <Link href="/pending" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700">
+                Check your status
+              </Link>
+            ) : (
+              <>
+                <Link href="/register" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700">
+                  Request access
+                </Link>
+                <Link href="/login" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+                  Sign in
+                </Link>
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="mb-4 text-xl font-semibold">Jobs by state</h2>

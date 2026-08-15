@@ -1,5 +1,6 @@
 import Link from "next/link";
-
+
+import { requireApprovedPage } from "@/lib/guard";
 import { Filters } from "@/components/Filters";
 import { JobCard } from "@/components/JobCard";
 import { api } from "@/lib/api";
@@ -25,6 +26,8 @@ type HrefPatch = Partial<Record<(typeof CARRIED)[number], string>> & {
 };
 
 export default async function JobsPage({ searchParams }: { searchParams: Search }) {
+  // Redirects to /login or /pending. The API enforces this independently.
+  await requireApprovedPage();
   const params = await searchParams;
 
   const one = (key: string): string | undefined => {

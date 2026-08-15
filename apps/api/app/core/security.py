@@ -17,60 +17,33 @@ account is trying to close.
 
 from __future__ import annotations
 
-import contextlib
 import datetime as dt
 import hmac
 import secrets
 from typing import Any, Final
 
 import jwt
-from argon2 import PasswordHasher
-from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from jobplatform_shared import get_settings
 
-#: Defaults follow the argon2-cffi maintainers' recommendation. Tuning these is a
-#: deployment decision; raising them invalidates nothing, since verify() detects the
-#: parameters from the stored hash and `needs_rehash` reports when an upgrade is due.
-_hasher: Final = PasswordHasher()
-
-#: A hash of a value nobody knows, used to spend the same CPU time verifying a password for
-#: an email that does not exist as for one that does. Without it, "no such user" returns
-#: measurably faster than "wrong password" and the login endpoint becomes an account
-#: enumeration oracle.
-_DUMMY_HASH: Final = _hasher.hash(secrets.token_urlsafe(32))
+# Hashing lives in the shared package: scripts/create_admin.py needs it too, and it does
+# not run in the API image. Re-exported here so call sites inside the API read naturally.
+from jobplatform_shared.passwords import hash_password, needs_rehash, verify_password
 
 TOKEN_TYPE_ACCESS: Final = "access"  # noqa: S105  # a token *type*, not a secret
 TOKEN_TYPE_REFRESH: Final = "refresh"  # noqa: S105  # a token *type*, not a secret
 
-
-def hash_password(password: str) -> str:
-    return _hasher.hash(password)
-
-
-def verify_password(password: str, password_hash: str | None) -> bool:
-    """Check a password, in constant-ish time whether or not the account exists.
-
-    Pass ``None`` for an account with no password set (or no account at all) and this still
-    performs a full verification against a dummy hash before returning False.
-    """
-    if not password_hash:
-        with contextlib.suppress(VerifyMismatchError, VerificationError, InvalidHashError):
-            _hasher.verify(_DUMMY_HASH, password)
-        return False
-    try:
-        _hasher.verify(password_hash, password)
-    except (VerifyMismatchError, VerificationError, InvalidHashError):
-        return False
-    return True
-
-
-def needs_rehash(password_hash: str) -> bool:
-    """True when the stored hash uses weaker parameters than the current policy."""
-    try:
-        return _hasher.check_needs_rehash(password_hash)
-    except InvalidHashError:
-        return True
+__all__ = [
+    "TOKEN_TYPE_ACCESS",
+    "TOKEN_TYPE_REFRESH",
+    "TokenError",
+    "create_access_token",
+    "create_refresh_token",
+    "decode_token",
+    "hash_password",
+    "needs_rehash",
+    "verify_password",
+]
 
 
 def _now() -> dt.datetime:

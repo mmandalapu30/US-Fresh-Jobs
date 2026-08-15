@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-for pkg in ("packages/shared", "packages/schemas", "apps/api"):
+for pkg in ("packages/shared", "packages/schemas"):
     sys.path.insert(0, str(ROOT / pkg))
 
 
@@ -40,14 +40,30 @@ def main() -> int:
 
     from sqlalchemy import create_engine, text
 
-    from app.core.security import hash_password
     from jobplatform_shared import get_settings
+    from jobplatform_shared.passwords import hash_password
 
     settings = get_settings()
 
     email = (args.email or os.environ.get("ADMIN_EMAIL") or "").strip().lower()
-    if not email or "@" not in email:
+    if not email:
         print("An email is required: --email or ADMIN_EMAIL", file=sys.stderr)
+        return 2
+
+    # Validate exactly as the login endpoint does. Without this the script will happily
+    # create an administrator whose address the API then refuses -- an admin who cannot
+    # sign in, discovered only at the worst moment. Reserved domains like .test and
+    # .local are the ones that bite.
+    try:
+        from email_validator import EmailNotValidError, validate_email
+
+        email = validate_email(email, check_deliverability=False).normalized.lower()
+    except ImportError:
+        if "@" not in email:
+            print("That does not look like an email address.", file=sys.stderr)
+            return 2
+    except EmailNotValidError as exc:
+        print(f"{email} is not an address the API will accept: {exc}", file=sys.stderr)
         return 2
 
     password = os.environ.get("ADMIN_PASSWORD")
@@ -63,7 +79,14 @@ def main() -> int:
         return 2
 
     # A plain sync engine: this runs once, by hand, and does not need the async stack.
-    url = str(settings.database_url).replace("+psycopg", "").replace("+asyncpg", "")
+    #
+    # The driver has to be named explicitly. Stripping it entirely leaves a bare
+    # postgresql:// URL, and SQLAlchemy then defaults to psycopg2 -- which is not what
+    # this project installs, so the script died on ModuleNotFoundError rather than
+    # anything to do with the database. psycopg (v3) arrives with jobplatform-shared.
+    url = str(settings.database_url).replace("+asyncpg", "+psycopg")
+    if "+" not in url.split("://", 1)[0]:
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
     engine = create_engine(url, future=True)
 
     with engine.begin() as conn:
