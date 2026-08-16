@@ -27,6 +27,11 @@ COMPOSE_FILE="infra/docker/docker-compose.prod.yml"
 [ -f ./.deploy.conf ] && . ./.deploy.conf
 COMPOSE_OVERLAY="${COMPOSE_OVERLAY:-}"
 ENV_FILE=".env.production"
+# The URL to probe once the containers are up. http://localhost stops working the moment
+# Caddy serves a real hostname: it 308-redirects to https, and https://localhost is a
+# certificate Caddy will never hold. On a TLS host set HEALTH_URL in .deploy.conf to the
+# public address. Getting this wrong does not fail safe -- every deploy times out and
+# "rolls back" a release that was serving perfectly.
 HEALTH_URL="${HEALTH_URL:-http://localhost/}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 LOG="${DEPLOY_LOG:-/var/log/jobplatform-deploy.log}"
@@ -104,7 +109,9 @@ log "--- changes in this deploy ---"
 git --no-pager log --oneline "$current..$target" 2>/dev/null | head -20 | tee -a "$LOG" \
   || log "(target is not a descendant of HEAD)"
 
-migrations="$(git diff --name-only "$current" "$target" -- database/migrations/versions/ 2>/dev/null)"
+# --diff-filter=A: only *added* files. A plain diff reports deletions too, so a reverted
+# migration was announced as a new one-way schema change that was not happening.
+migrations="$(git diff --name-only --diff-filter=A "$current" "$target" -- database/migrations/versions/ 2>/dev/null)"
 if [ -n "$migrations" ]; then
   log "--- this release ADDS MIGRATIONS ---"
   echo "$migrations" | sed 's/^/    /' | tee -a "$LOG"
@@ -119,6 +126,11 @@ fi
 # ---------------------------------------------------------------------------------------
 # Tag what is running now, before touching git, so a build failure leaves the images and
 # the working tree consistent with each other.
+# Record the tag we are leaving, so a rollback can return to it. Retagging :rollback is
+# useless on a host that pins by sha -- nothing references :latest there, so the retag
+# silently changes nothing and the "rollback" leaves the new images running.
+PREVIOUS_TAG="${IMAGE_TAG:-latest}"
+log "--- previous image tag: $PREVIOUS_TAG ---"
 log "--- tagging current images as :rollback ---"
 for img in $IMAGES; do
   if docker image inspect "${img}:latest" >/dev/null 2>&1; then
@@ -167,8 +179,10 @@ code="000"
 while [ "$(date +%s)" -lt "$deadline" ]; do
   notready="$(docker ps --filter label=com.docker.compose.project=jobplatform-prod \
                --format '{{.Status}}' | grep -ci 'unhealthy\|health: starting' || true)"
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$HEALTH_URL" || echo 000)"
-  if [ "$notready" -eq 0 ] && [ "$code" = "200" ]; then
+  # -L so a redirect to the canonical https URL is followed rather than counted as a
+  # failure; 2xx after redirects is the only thing that means "serving".
+  code="$(curl -sL -o /dev/null -w '%{http_code}' --max-time 15 "$HEALTH_URL" || echo 000)"
+  if [ "$notready" -eq 0 ] && [ "${code#2}" != "$code" ]; then
     healthy=1
     break
   fi
@@ -179,9 +193,18 @@ if [ "$healthy" -ne 1 ]; then
   log "!!! not healthy after ${HEALTH_TIMEOUT}s (last HTTP $code) -- rolling back"
   docker ps --format 'table {{.Names}}\t{{.Status}}' | tee -a "$LOG"
   $C logs --tail 40 api web 2>&1 | tail -60 | tee -a "$LOG"
-  for img in $IMAGES; do
-    docker image inspect "${img}:rollback" >/dev/null 2>&1 && docker tag "${img}:rollback" "${img}:latest"
-  done
+  if [ -n "$COMPOSE_OVERLAY" ]; then
+    # Pinned host: put the tag back and re-pull. Retagging local images would not help,
+    # because compose resolves the pinned tag, not :latest.
+    log "restoring image tag $PREVIOUS_TAG"
+    sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$PREVIOUS_TAG|" ./.deploy.conf 2>/dev/null || true
+    sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$PREVIOUS_TAG|" "$ENV_FILE" 2>/dev/null || true
+    IMAGE_TAG="$PREVIOUS_TAG"; export IMAGE_TAG
+  else
+    for img in $IMAGES; do
+      docker image inspect "${img}:rollback" >/dev/null 2>&1 && docker tag "${img}:rollback" "${img}:latest"
+    done
+  fi
   git checkout -q "$current" 2>/dev/null || true
   if $C up -d --no-build; then
     log "rolled back to ${current:0:8}"
