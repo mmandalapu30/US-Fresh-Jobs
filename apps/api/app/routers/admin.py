@@ -331,8 +331,12 @@ class IngestRequestState(BaseModel):
     busy: bool = False
 
 
-@router.post("/admin/ingest", response_model=IngestRequestState, status_code=202,
-             summary="Fetch jobs from the source now")
+@router.post(
+    "/admin/ingest",
+    response_model=IngestRequestState,
+    status_code=202,
+    summary="Fetch jobs from the source now",
+)
 async def request_ingest(
     admin: AdminUserDep,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -347,13 +351,17 @@ async def request_ingest(
     # One at a time. A second request while one is in flight is almost always an impatient
     # second click, and queueing it would run the whole thing twice for no benefit.
     existing = (
-        await session.execute(
-            text(
-                "SELECT id, status::text AS status, created_at FROM ingest_requests"
-                " WHERE status IN ('QUEUED', 'RUNNING') ORDER BY id DESC LIMIT 1"
+        (
+            await session.execute(
+                text(
+                    "SELECT id, status::text AS status, created_at FROM ingest_requests"
+                    " WHERE status IN ('QUEUED', 'RUNNING') ORDER BY id DESC LIMIT 1"
+                )
             )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
     if existing:
         return IngestRequestState(
             id=existing["id"],
@@ -364,14 +372,18 @@ async def request_ingest(
         )
 
     row = (
-        await session.execute(
-            text(
-                "INSERT INTO ingest_requests (requested_by) VALUES (:by)"
-                " RETURNING id, status::text AS status, created_at"
-            ),
-            {"by": admin.id},
+        (
+            await session.execute(
+                text(
+                    "INSERT INTO ingest_requests (requested_by) VALUES (:by)"
+                    " RETURNING id, status::text AS status, created_at"
+                ),
+                {"by": admin.id},
+            )
         )
-    ).mappings().one()
+        .mappings()
+        .one()
+    )
     await session.commit()
 
     return IngestRequestState(
@@ -391,16 +403,20 @@ async def ingest_status(
 ) -> IngestRequestState:
     """The most recent request, whatever became of it."""
     row = (
-        await session.execute(
-            text(
-                "SELECT r.id, r.status::text AS status, r.message, r.created_at,"
-                "       r.finished_at, u.email AS requested_by"
-                "  FROM ingest_requests r"
-                "  LEFT JOIN users u ON u.id = r.requested_by"
-                " ORDER BY r.id DESC LIMIT 1"
+        (
+            await session.execute(
+                text(
+                    "SELECT r.id, r.status::text AS status, r.message, r.created_at,"
+                    "       r.finished_at, u.email AS requested_by"
+                    "  FROM ingest_requests r"
+                    "  LEFT JOIN users u ON u.id = r.requested_by"
+                    " ORDER BY r.id DESC LIMIT 1"
+                )
             )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
 
     if not row:
         return IngestRequestState(status="IDLE")
