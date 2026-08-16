@@ -100,10 +100,13 @@ services:
     environment:
       OBJECT_STORAGE_URL: file:///data/archive
       OBJECT_STORAGE_USE_SSL: "false"
-      # Parquet reads are the memory peak on this host. One row group at a time, one
-      # thread, so a daily run cannot take the machine down with it.
-      INGEST_ROW_GROUP_BATCH_SIZE: "2"
-      OMP_NUM_THREADS: "1"
+      # Parquet reads are not the peak they look like: with these already set, a run still
+      # reached 2.0 GB resident and was cgroup-killed. The cost is further down the
+      # pipeline -- the staging merge and the in-memory company registry -- so the upsert
+      # chunk is tunable per host too, and lowering it trades throughput for headroom.
+      INGEST_ROW_GROUP_BATCH_SIZE: "${INGEST_ROW_GROUP_BATCH_SIZE:-2}"
+      INGEST_UPSERT_CHUNK_SIZE: "${INGEST_UPSERT_CHUNK_SIZE:-5000}"
+      OMP_NUM_THREADS: "${OMP_NUM_THREADS:-1}"
     depends_on: !reset
       postgres:
         condition: service_healthy
