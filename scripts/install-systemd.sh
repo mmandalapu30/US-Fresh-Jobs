@@ -21,9 +21,11 @@ UNIT_DIR="/etc/systemd/system"
 UNITS=(jobplatform-daily.service jobplatform-daily.timer
        jobplatform-catchup.service jobplatform-catchup.timer
        jobplatform-backup.service jobplatform-backup.timer
-       jobplatform-freshness.service jobplatform-freshness.timer)
+       jobplatform-freshness.service jobplatform-freshness.timer
+       jobplatform-ingest-requests.service jobplatform-ingest-requests.timer)
 TIMERS=(jobplatform-daily.timer jobplatform-catchup.timer
-        jobplatform-backup.timer jobplatform-freshness.timer)
+        jobplatform-backup.timer jobplatform-freshness.timer
+        jobplatform-ingest-requests.timer)
 
 remove=0
 dry_run=0
@@ -100,6 +102,7 @@ for unit in "${UNITS[@]}"; do
   rendered=$(sed -e "s|^WorkingDirectory=.*|WorkingDirectory=$REPO|" \
                  -e "s|^ExecStart=[^ ]*/scripts/daily.sh|ExecStart=$REPO/scripts/daily.sh|" \
                  -e "s|^ExecStart=[^ ]*/infra/backup/|ExecStart=$REPO/infra/backup/|" \
+                 -e "s|^ExecStart=[^ ]*/infra/deploy/|ExecStart=$REPO/infra/deploy/|" \
                  -e "s|^Documentation=file://.*|Documentation=file://$REPO/docs/07-deployment.md|" \
                  "$UNIT_SRC/$unit")
 
@@ -110,7 +113,10 @@ for unit in "${UNITS[@]}"; do
   # Only the ingest units drive compose; backup and freshness talk to the running
   # postgres container directly and would gain nothing from the overlay.
   needs_overlay=0
-  case "$unit" in jobplatform-daily.service|jobplatform-catchup.service) needs_overlay=1 ;; esac
+  case "$unit" in
+    jobplatform-daily.service|jobplatform-catchup.service|jobplatform-ingest-requests.service)
+      needs_overlay=1 ;;
+  esac
   if [ "$needs_overlay" -eq 1 ] && [ -n "${COMPOSE_OVERLAY:-}" ]; then
     dropin="$UNIT_DIR/${unit}.d"
     tag="${IMAGE_TAG:-$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null | tr "/" "-")}"

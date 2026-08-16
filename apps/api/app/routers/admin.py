@@ -315,3 +315,101 @@ async def audit(
         .all()
     )
     return [AuditEntry(**dict(r)) for r in rows]
+
+
+class IngestRequestState(BaseModel):
+    """What the fetch button should show right now."""
+
+    id: int | None = None
+    status: str  # QUEUED | RUNNING | SUCCEEDED | FAILED | SKIPPED | IDLE
+    message: str | None = None
+    requested_by: str | None = None
+    created_at: dt.datetime | None = None
+    finished_at: dt.datetime | None = None
+    #: True while anything is in flight, so the button can disable itself rather than
+    #: letting an impatient click queue a second request behind the first.
+    busy: bool = False
+
+
+@router.post("/admin/ingest", response_model=IngestRequestState, status_code=202,
+             summary="Fetch jobs from the source now")
+async def request_ingest(
+    admin: AdminUserDep,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> IngestRequestState:
+    """Queue an on-demand fetch.
+
+    Returns 202, not 200: the work has been accepted, not done. The API cannot run the
+    ingest itself -- it has no Docker socket, and giving it one would let any
+    request-handling bug start privileged containers on the host. A timer on the host
+    claims the row instead, usually within a minute.
+    """
+    # One at a time. A second request while one is in flight is almost always an impatient
+    # second click, and queueing it would run the whole thing twice for no benefit.
+    existing = (
+        await session.execute(
+            text(
+                "SELECT id, status::text AS status, created_at FROM ingest_requests"
+                " WHERE status IN ('QUEUED', 'RUNNING') ORDER BY id DESC LIMIT 1"
+            )
+        )
+    ).mappings().first()
+    if existing:
+        return IngestRequestState(
+            id=existing["id"],
+            status=existing["status"],
+            message="A fetch is already in progress.",
+            created_at=existing["created_at"],
+            busy=True,
+        )
+
+    row = (
+        await session.execute(
+            text(
+                "INSERT INTO ingest_requests (requested_by) VALUES (:by)"
+                " RETURNING id, status::text AS status, created_at"
+            ),
+            {"by": admin.id},
+        )
+    ).mappings().one()
+    await session.commit()
+
+    return IngestRequestState(
+        id=row["id"],
+        status=row["status"],
+        message="Fetch queued. It will start within a minute.",
+        requested_by=admin.email,
+        created_at=row["created_at"],
+        busy=True,
+    )
+
+
+@router.get("/admin/ingest", response_model=IngestRequestState, summary="Fetch status")
+async def ingest_status(
+    _: AdminUserDep,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> IngestRequestState:
+    """The most recent request, whatever became of it."""
+    row = (
+        await session.execute(
+            text(
+                "SELECT r.id, r.status::text AS status, r.message, r.created_at,"
+                "       r.finished_at, u.email AS requested_by"
+                "  FROM ingest_requests r"
+                "  LEFT JOIN users u ON u.id = r.requested_by"
+                " ORDER BY r.id DESC LIMIT 1"
+            )
+        )
+    ).mappings().first()
+
+    if not row:
+        return IngestRequestState(status="IDLE")
+    return IngestRequestState(
+        id=row["id"],
+        status=row["status"],
+        message=row["message"],
+        requested_by=row["requested_by"],
+        created_at=row["created_at"],
+        finished_at=row["finished_at"],
+        busy=row["status"] in ("QUEUED", "RUNNING"),
+    )

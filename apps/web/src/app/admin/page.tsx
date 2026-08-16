@@ -1,7 +1,9 @@
 import Link from "next/link";
 
+import { FetchJobsButton } from "@/components/FetchJobsButton";
 import { adminApi } from "@/lib/admin";
 import { relativeTime } from "@/lib/format";
+import { getFetchStatus } from "@/app/admin/actions";
 import { requireAdminPage } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -34,9 +36,10 @@ export default async function AdminOverview() {
   // without this the fetch below runs first and throws 401 for a signed-out visitor.
   await requireAdminPage();
 
-  const [summary, audit] = await Promise.all([
+  const [summary, audit, fetchState] = await Promise.all([
     adminApi.summary(),
     adminApi.audit(10).catch(() => []),
+    getFetchStatus(),
   ]);
 
   return (
@@ -54,6 +57,18 @@ export default async function AdminOverview() {
           </span>
         </Link>
       ) : null}
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+            Job data
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Jobs are fetched automatically every morning. Use this to pull the latest now.
+          </p>
+        </div>
+        <FetchJobsButton initial={fetchState} />
+      </section>
 
       <section>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">

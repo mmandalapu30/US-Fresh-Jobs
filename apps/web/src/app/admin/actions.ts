@@ -64,3 +64,51 @@ export async function decideOnUser(
   };
   return { ok: true, message: `User ${past[action]}.` };
 }
+
+
+export interface FetchState {
+  id?: number | null;
+  status: string;
+  message?: string | null;
+  busy: boolean;
+}
+
+/**
+ * Ask for an on-demand fetch.
+ *
+ * 202, not 200: the request has been accepted, not carried out. A timer on the host
+ * claims it within the minute and runs the ingest with the same image and settings the
+ * daily schedule uses.
+ */
+export async function requestFetch(): Promise<FetchState> {
+  const token = await getSessionToken();
+  try {
+    const response = await fetch(`${API_BASE}/admin/ingest`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return { status: "FAILED", message: "Could not queue a fetch.", busy: false };
+    }
+    return (await response.json()) as FetchState;
+  } catch {
+    return { status: "FAILED", message: "Could not reach the server.", busy: false };
+  }
+}
+
+export async function getFetchStatus(): Promise<FetchState> {
+  const token = await getSessionToken();
+  try {
+    const response = await fetch(`${API_BASE}/admin/ingest`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return { status: "IDLE", busy: false };
+    }
+    return (await response.json()) as FetchState;
+  } catch {
+    return { status: "IDLE", busy: false };
+  }
+}

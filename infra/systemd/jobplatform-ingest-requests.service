@@ -1,0 +1,13 @@
+[Unit]
+Description=US Fresh Jobs — run on-demand fetch requests from the admin console
+Documentation=file:///srv/job-platform/docs/08-access-control.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/job-platform
+ExecStart=/srv/job-platform/infra/deploy/run-ingest-requests.sh
+# Same overlay the deploy uses, so an on-demand fetch pulls the published image rather
+# than rebuilding it. install-systemd.sh writes this in as a drop-in on hosts that need it.
+Environment=COMPOSE=1
