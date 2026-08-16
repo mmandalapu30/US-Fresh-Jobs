@@ -21,6 +21,12 @@
 #  * Memory limits and Postgres are retuned. The production numbers assume 8 GB; here they
 #    add up to more than the machine has, and Docker would let them.
 #
+#    The ceilings are per-host settings, not constants. Defaults suit a 1 GB instance;
+#    set MEM_INGEST and friends in .env.production on anything larger. Leaving the 1 GB
+#    numbers on a 4 GB host is not merely conservative -- it OOM-killed the nightly
+#    ingest (exit 137) while three gigabytes sat unused, and every later run then
+#    refused the lock the killed one still held.
+#
 # Start the services explicitly so MinIO stays down -- an overlay cannot delete a service:
 #
 #   ... up -d postgres redis api web caddy
@@ -45,7 +51,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 320M
+          memory: ${MEM_POSTGRES:-320M}
 
   redis:
     # Celery is not running on this host, so Redis is a cache only and can be told to
@@ -54,7 +60,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 64M
+          memory: ${MEM_REDIS:-64M}
 
   api:
     image: ghcr.io/mmandalapu30/us-fresh-jobs/api:${IMAGE_TAG:-latest}
@@ -66,7 +72,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: ${MEM_API:-256M}
 
   web:
     image: ghcr.io/mmandalapu30/us-fresh-jobs/web:${IMAGE_TAG:-latest}
@@ -75,13 +81,13 @@ services:
     deploy:
       resources:
         limits:
-          memory: 192M
+          memory: ${MEM_WEB:-192M}
 
   caddy:
     deploy:
       resources:
         limits:
-          memory: 48M
+          memory: ${MEM_CADDY:-48M}
 
   ingest:
     image: ghcr.io/mmandalapu30/us-fresh-jobs/ingest:${IMAGE_TAG:-latest}
@@ -104,7 +110,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 640M
+          memory: ${MEM_INGEST:-640M}
 
 volumes:
   archive_data:
