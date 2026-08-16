@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jobplatform_schemas import (
@@ -489,3 +490,148 @@ async def ingestion_health(
         "runs": await repo.ingestion_health(),
         "rejections": await repo.rejection_breakdown(),
     }
+
+
+class IngestRequestState(BaseModel):
+    """What the "load new jobs" button should show right now."""
+
+    id: int | None = None
+    status: str  # QUEUED | RUNNING | SUCCEEDED | FAILED | SKIPPED | IDLE
+    message: str | None = None
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
+    #: True while anything is in flight, so the button disables itself rather than
+    #: letting an impatient second click queue a duplicate run.
+    busy: bool = False
+    #: Seconds until another fetch may be requested. Zero when one may be made now.
+    retry_after: int = 0
+
+
+#: Minimum gap between completed fetches. This endpoint is unauthenticated -- there is no
+#: login in this deployment -- so the cooldown is what stops anyone with the URL from
+#: making the server ingest continuously. It bounds abuse to roughly what the daily
+#: schedule already does, and costs a real operator nothing: a fetch takes longer than
+#: this anyway.
+_FETCH_COOLDOWN_SECONDS: Final = 600
+
+
+@router.post(
+    "/admin/ingest",
+    response_model=IngestRequestState,
+    status_code=202,
+    summary="Fetch jobs from the source now",
+)
+async def request_ingest(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> IngestRequestState:
+    """Queue an on-demand fetch.
+
+    202, not 200: the work is accepted, not done. The API cannot run the ingest itself --
+    it has no Docker socket, and giving it one would let any request-handling bug start
+    privileged containers on the host. A timer claims the row, usually within a minute.
+    """
+    row = (
+        (
+            await session.execute(
+                text(
+                    "SELECT id, status::text AS status, created_at, finished_at,"
+                    "       EXTRACT(EPOCH FROM (now() - finished_at))::bigint AS since_finished"
+                    "  FROM ingest_requests ORDER BY id DESC LIMIT 1"
+                )
+            )
+        )
+        .mappings()
+        .first()
+    )
+
+    # One at a time. A second request while one is in flight is almost always an impatient
+    # second click, and queueing it would do the same work twice for no benefit.
+    if row and row["status"] in ("QUEUED", "RUNNING"):
+        return IngestRequestState(
+            id=row["id"],
+            status=row["status"],
+            busy=True,
+            message="A fetch is already in progress.",
+            created_at=row["created_at"],
+        )
+
+    if row and row["since_finished"] is not None:
+        elapsed = int(row["since_finished"])
+        if elapsed < _FETCH_COOLDOWN_SECONDS:
+            remaining = _FETCH_COOLDOWN_SECONDS - elapsed
+            return IngestRequestState(
+                id=row["id"],
+                status=row["status"],
+                busy=False,
+                retry_after=remaining,
+                message=f"Recently fetched. You can fetch again in {remaining // 60 + 1} min.",
+                created_at=row["created_at"],
+                finished_at=row["finished_at"],
+            )
+
+    # Caddy sets X-Forwarded-For; its own address would be useless here.
+    caller = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else None
+    )
+
+    created = (
+        (
+            await session.execute(
+                text(
+                    "INSERT INTO ingest_requests (requested_by) VALUES (:by)"
+                    " RETURNING id, status::text AS status, created_at"
+                ),
+                {"by": caller},
+            )
+        )
+        .mappings()
+        .one()
+    )
+    await session.commit()
+
+    return IngestRequestState(
+        id=created["id"],
+        status=created["status"],
+        busy=True,
+        message="Fetch queued. It will start within a minute.",
+        created_at=created["created_at"],
+    )
+
+
+@router.get("/admin/ingest", response_model=IngestRequestState, summary="Fetch status")
+async def ingest_request_status(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> IngestRequestState:
+    """The most recent request, whatever became of it."""
+    row = (
+        (
+            await session.execute(
+                text(
+                    "SELECT id, status::text AS status, message, created_at, finished_at,"
+                    "       EXTRACT(EPOCH FROM (now() - finished_at))::bigint AS since_finished"
+                    "  FROM ingest_requests ORDER BY id DESC LIMIT 1"
+                )
+            )
+        )
+        .mappings()
+        .first()
+    )
+
+    if not row:
+        return IngestRequestState(status="IDLE")
+
+    busy = row["status"] in ("QUEUED", "RUNNING")
+    remaining = 0
+    if not busy and row["since_finished"] is not None:
+        remaining = max(0, _FETCH_COOLDOWN_SECONDS - int(row["since_finished"]))
+
+    return IngestRequestState(
+        id=row["id"],
+        status=row["status"],
+        message=row["message"],
+        created_at=row["created_at"],
+        finished_at=row["finished_at"],
+        busy=busy,
+        retry_after=remaining,
+    )

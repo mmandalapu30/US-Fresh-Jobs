@@ -1,3 +1,5 @@
+import { getLoadStatus } from "@/app/admin/actions";
+import { LoadJobsButton } from "@/components/LoadJobsButton";
 import { api } from "@/lib/api";
 import { absoluteTime, formatNumber } from "@/lib/format";
 
@@ -30,12 +32,26 @@ interface Rejection {
 }
 
 export default async function AdminPage() {
-  const [stats, health] = await Promise.all([api.stats(), api.ingestion()]);
+  const [stats, health, loadState] = await Promise.all([
+    api.stats(),
+    api.ingestion(),
+    getLoadStatus(),
+  ]);
   const runs = health.runs as Run[];
   const rejections = health.rejections as Rejection[];
 
   return (
     <div className="space-y-8">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Job data
+        </h2>
+        <p className="mt-1 mb-3 text-xs text-slate-500">
+          Jobs load automatically each morning, with catch-up runs through the afternoon.
+          Use this to pull the latest right now.
+        </p>
+        <LoadJobsButton initial={loadState} />
+      </section>
       <h1 className="text-2xl font-bold">Admin · ingestion</h1>
 
       <section>
