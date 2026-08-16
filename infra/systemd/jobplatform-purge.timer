@@ -1,0 +1,13 @@
+[Unit]
+Description=US Fresh Jobs — purge old jobs
+
+[Timer]
+# 04:30, half an hour after the backup and well clear of the 09:00 ingest. The gap is the
+# safety margin: the purge checks for a backup newer than 24 hours and refuses without one,
+# so the backup must have finished first.
+OnCalendar=*-*-* 04:30:00 America/New_York
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

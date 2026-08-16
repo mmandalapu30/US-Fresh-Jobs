@@ -1,0 +1,17 @@
+[Unit]
+Description=US Fresh Jobs — delete jobs older than the purge window
+Documentation=file:///srv/job-platform/docs/07-deployment.md
+After=docker.service jobplatform-backup.service
+Requires=docker.service
+# Ordered after the backup, not merely scheduled later: this is the one job that destroys
+# data, and it refuses to run without a backup from the last 24 hours.
+Wants=jobplatform-backup.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/job-platform
+ExecStart=/srv/job-platform/infra/backup/purge-old-jobs.sh --execute
+# Must exceed RETENTION_MAX_POSTED_AGE_DAYS, or this would delete jobs the board is still
+# showing. The script refuses rather than trusting the operator to remember.
+Environment=PURGE_AFTER_DAYS=15
+Environment=BACKUP_DIR=/var/backups/jobplatform

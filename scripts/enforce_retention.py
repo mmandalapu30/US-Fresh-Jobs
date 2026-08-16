@@ -187,6 +187,27 @@ def main() -> int:
         f"  found by us in last 24h: {after.found_24h:,}"
     )
 
+    # job_events has no foreign key to jobs -- it is partitioned by occurred_at, and the
+    # constraint was never added -- so a DELETE leaves its rows behind pointing at ids that
+    # no longer exist. Every other dependent (job_sources, job_skills, job_category_map,
+    # saved_jobs, alert_deliveries) cascades and needs nothing here.
+    #
+    # Only meaningful after an actual delete: --expire-only leaves the jobs in place, so
+    # nothing is orphaned and this would scan for nothing.
+    if args.execute and not args.expire_only:
+        with engine.begin() as conn:
+            orphaned = (
+                conn.execute(
+                    text(
+                        "DELETE FROM job_events e"
+                        " WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = e.job_id)"
+                    )
+                ).rowcount
+                or 0
+            )
+        if orphaned:
+            print(f"\nRemoved {orphaned:,} orphaned job_events rows")
+
     # Rejections are the audit trail behind "nothing is silently discarded", but they
     # accumulate far faster than jobs: a narrow ingest scope rejects far more than it
     # keeps, and the table reached 2.3M rows / 563 MB in a day. Recent ones are what

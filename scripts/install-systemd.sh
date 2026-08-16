@@ -22,10 +22,11 @@ UNITS=(jobplatform-daily.service jobplatform-daily.timer
        jobplatform-catchup.service jobplatform-catchup.timer
        jobplatform-backup.service jobplatform-backup.timer
        jobplatform-freshness.service jobplatform-freshness.timer
-       jobplatform-ingest-requests.service jobplatform-ingest-requests.timer)
+       jobplatform-ingest-requests.service jobplatform-ingest-requests.timer
+       jobplatform-purge.service jobplatform-purge.timer)
 TIMERS=(jobplatform-daily.timer jobplatform-catchup.timer
         jobplatform-backup.timer jobplatform-freshness.timer
-        jobplatform-ingest-requests.timer)
+        jobplatform-ingest-requests.timer jobplatform-purge.timer)
 
 remove=0
 dry_run=0
