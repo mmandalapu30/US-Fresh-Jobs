@@ -4,14 +4,10 @@ A continuously updated U.S. job data platform. Not a website with 100 jobs — t
 preserves every qualifying job, and the UI provides fast access to the newest and most
 relevant ones.
 
-**Current state: milestones 1–12 and 14 are built, running on live data, and deployed.** Jobs flow
+**Current state: milestones 1–11 and 14 are built and running on live data.** Jobs flow
 from the source bucket into PostgreSQL, out through the API, and onto a rendered Next.js
-UI, on a daily schedule. **Job data is visible only to users an administrator has
-approved** — the site is public, the data is not; see
-[`docs/08-access-control.md`](docs/08-access-control.md). Alerts are not built.
-
-The stack runs in production on a single VPS behind Caddy with automatic TLS, with daily
-ingest, nightly backups and a freshness check on systemd timers —
+UI, on a daily schedule. Authentication, alerts and monitoring are not built. The
+production stack is written but has not yet been run on a server — see
 [`docs/07-deployment.md`](docs/07-deployment.md).
 
 ---

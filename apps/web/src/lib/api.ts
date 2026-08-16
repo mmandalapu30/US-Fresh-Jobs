@@ -1,5 +1,3 @@
-import { getSessionToken } from "./session";
-
 /**
  * Server-side API client.
  *
@@ -168,26 +166,16 @@ async function get<T>(path: string, params: Record<string, unknown> = {}): Promi
     }
   }
 
-  // Forward the caller's session. Job responses are now per-user -- an approved user and
-  // a pending one get different answers from the same URL -- so a shared cache would be a
-  // data leak, not merely stale. `no-store` replaces the old revalidation window.
-  const token = await getSessionToken();
   const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    // Job data is volatile. A short revalidation window keeps the feed fresh without
+    // hammering the API on every render.
+    next: { revalidate: 30 },
+    headers: { Accept: "application/json" },
   });
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    // 401 and 403 are answers, not failures: the caller decides whether to send the
-    // visitor to /login, /pending, or a refusal page. The status travels with the error.
-    throw new ApiError(
-      `${path} failed: ${response.status} ${body.slice(0, 200)}`,
-      response.status,
-    );
+    throw new ApiError(`${path} failed: ${response.status} ${body.slice(0, 200)}`, response.status);
   }
   return (await response.json()) as T;
 }

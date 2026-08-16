@@ -10,9 +10,6 @@ dependencies = [
     "psycopg[binary]>=3.1.18",
     "asyncpg>=0.29",
     "structlog>=24.1",
-    # Password hashing is shared: the API hashes on register/login, and
-    # scripts/create_admin.py hashes when bootstrapping the first administrator.
-    "argon2-cffi>=23.1",
 ]
 
 [build-system]

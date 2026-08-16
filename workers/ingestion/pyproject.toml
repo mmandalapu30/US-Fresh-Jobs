@@ -13,9 +13,6 @@ dependencies = [
     "boto3>=1.34",
     "tenacity>=8.3",
     "prometheus-client>=0.20",
-    # scripts/create_admin.py runs in this image and validates the administrator's
-    # email exactly as the API does, so it cannot create an admin who cannot log in.
-    "email-validator>=2.1",
     # Migrations run from this image -- docs/07 §2 invokes `python -m alembic` in the
     # ingest container. SQLAlchemy and psycopg come from jobplatform-shared.
     "alembic>=1.13",

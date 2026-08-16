@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { requireApprovedPage } from "@/lib/guard";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AppliedButton } from "@/components/AppliedButton";
@@ -21,8 +20,6 @@ export default async function JobDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  // Redirects to /login or /pending. The API enforces this independently.
-  await requireApprovedPage();
   const { id } = await params;
 
   let job;

@@ -22,7 +22,7 @@ from jobplatform_shared.db import dispose_async_engine
 from jobplatform_shared.logging import bind_contextvars, clear_contextvars
 
 from .core.errors import register_exception_handlers
-from .routers import admin, auth, health, jobs, meta
+from .routers import health, jobs, meta
 
 logger = get_logger(__name__)
 
@@ -142,11 +142,6 @@ def create_app() -> FastAPI:
     app.include_router(health.router, tags=["operations"])
     app.include_router(meta.router, prefix=settings.api_v1_prefix, tags=["meta"])
     app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
-    # Auth is mounted unguarded -- registering and logging in are what an unauthenticated
-    # caller is *supposed* to be able to do. Every route inside admin.py carries
-    # require_admin individually, so mounting it here grants nothing on its own.
-    app.include_router(auth.router, prefix=settings.api_v1_prefix, tags=["auth"])
-    app.include_router(admin.router, prefix=settings.api_v1_prefix, tags=["admin"])
 
     return app
 

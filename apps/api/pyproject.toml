@@ -11,14 +11,6 @@ dependencies = [
     "redis>=5.0",
     "prometheus-client>=0.20",
     "python-multipart>=0.0.9",
-    # Auth. argon2-cffi rather than bcrypt: no 72-byte silent truncation, and the current
-    # recommendation for password hashing. PyJWT rather than python-jose, which is
-    # unmaintained and has had algorithm-confusion advisories.
-    "argon2-cffi>=23.1",
-    "pyjwt>=2.9",
-    # EmailStr validation is a separate package; without it every model using it
-    # raises ImportError at schema-build time, which is app start-up, not request time.
-    "email-validator>=2.1",
 ]
 
 [project.optional-dependencies]

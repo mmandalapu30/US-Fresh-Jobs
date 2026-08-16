@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { DataFreshness } from "@/components/DataFreshness";
-import { SessionNav } from "@/components/SessionNav";
 
 import { AppliedNavLink } from "@/components/AppliedNavLink";
 import { AppliedProvider } from "@/components/AppliedProvider";
@@ -36,10 +35,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </span>
                 <span>Fresh Jobs</span>
               </Link>
-              {/* Which links exist at all depends on who is signed in. Hiding a link is
-                  not protection -- every destination is guarded server-side -- but
-                  offering a visitor a page that will only redirect them is poor manners. */}
-              <SessionNav />
+              <div className="flex items-center gap-5 text-sm">
+                <Link href="/jobs" className="hover:text-blue-600">Browse</Link>
+                <Link href="/companies" className="hover:text-blue-600">Companies</Link>
+                <Link href="/search" className="hover:text-blue-600">Search</Link>
+                <AppliedNavLink />
+                <Link href="/admin" className="text-slate-500 hover:text-blue-600">Admin</Link>
+              </div>
             </nav>
           </header>
 

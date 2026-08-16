@@ -1,5 +1,4 @@
 import { JobCard } from "@/components/JobCard";
-import { requireApprovedPage } from "@/lib/guard";
 import { api } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 
@@ -8,8 +7,6 @@ export const revalidate = 30;
 type Search = Promise<Record<string, string | string[] | undefined>>;
 
 export default async function SearchPage({ searchParams }: { searchParams: Search }) {
-  // Redirects to /login or /pending. The API enforces this independently.
-  await requireApprovedPage();
   const params = await searchParams;
   const q = (Array.isArray(params.q) ? params.q[0] : params.q) ?? "";
 
