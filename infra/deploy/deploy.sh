@@ -156,7 +156,14 @@ log "now at $(git rev-parse --short HEAD)"
 #
 # PREVIOUS_TAG was captured further up, so rollback still restores the old tag.
 if [ -n "$COMPOSE_OVERLAY" ]; then
-  IMAGE_TAG="sha-$(git rev-parse HEAD)"      # images.yml publishes type=sha,format=long
+  # Not HEAD. images.yml only builds when a commit touches something the image contains,
+  # so a docs-only or deploy-script-only release publishes no image and pinning HEAD would
+  # pull a tag that does not exist -- turning a harmless release into a failed deploy.
+  # Pin the newest commit that did change image content; that is the tag CI published, and
+  # it is still immutable, so rollback-by-tag is unaffected.
+  #
+  # Keep this path list in step with the `paths:` filter in .github/workflows/images.yml.
+  IMAGE_TAG="sha-$(git log -1 --format=%H --       apps packages workers database scripts infra/docker .dockerignore)"
   export IMAGE_TAG
   for f in "$ENV_FILE" ./.deploy.conf; do
     [ -f "$f" ] || continue
@@ -168,7 +175,7 @@ if [ -n "$COMPOSE_OVERLAY" ]; then
       printf '%s\n' "IMAGE_TAG=$IMAGE_TAG" >> "$f"
     fi
   done
-  log "image tag now sha-$(git rev-parse --short HEAD)..."
+  log "image tag now ${IMAGE_TAG%%"${IMAGE_TAG#sha-???????}"}..."
 fi
 
 # ---------------------------------------------------------------------------------------
