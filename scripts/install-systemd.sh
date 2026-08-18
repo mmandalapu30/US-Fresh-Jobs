@@ -107,12 +107,20 @@ for unit in "${UNITS[@]}"; do
                  -e "s|^Documentation=file://.*|Documentation=file://$REPO/docs/07-deployment.md|" \
                  "$UNIT_SRC/$unit")
 
-  # A host running from prebuilt images needs COMPOSE_OVERLAY and IMAGE_TAG in the unit
-  # too, or the scheduled run rebuilds from source nightly instead of pulling. Written as
+  # A host running from prebuilt images needs COMPOSE_OVERLAY in the unit too, or the
+  # scheduled run rebuilds from source nightly instead of pulling. Written as
   # a drop-in rather than edited into the unit: systemd merges drop-ins itself, so the
   # tracked template stays the tracked template and an upgrade cannot silently drop this.
   # Only the ingest units drive compose; backup and freshness talk to the running
   # postgres container directly and would gain nothing from the overlay.
+  #
+  # IMAGE_TAG is deliberately not written here. deploy.sh rewrites it in .env.production on
+  # every deploy and rollback and compose reads it from there via --env-file, so a copy in
+  # the drop-in only shadows it -- systemd's Environment= beats --env-file -- and nothing
+  # ever refreshes the copy. Pinned that way the scheduled ingest keeps running whatever tag
+  # was current at install time while api and web move on: observed running four commits
+  # behind the rest of the stack. The fallback was worse than the pin, resolving to a branch
+  # name rather than to a tag that exists.
   needs_overlay=0
   case "$unit" in
     jobplatform-daily.service|jobplatform-catchup.service|jobplatform-ingest-requests.service)
@@ -120,13 +128,12 @@ for unit in "${UNITS[@]}"; do
   esac
   if [ "$needs_overlay" -eq 1 ] && [ -n "${COMPOSE_OVERLAY:-}" ]; then
     dropin="$UNIT_DIR/${unit}.d"
-    tag="${IMAGE_TAG:-$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null | tr "/" "-")}"
     if [ "$dry_run" -eq 1 ]; then
       echo "===== $dropin/overlay.conf ====="
-      printf "[Service]\nEnvironment=COMPOSE_OVERLAY=%s\nEnvironment=IMAGE_TAG=%s\n" "$COMPOSE_OVERLAY" "$tag"
+      printf "[Service]\nEnvironment=COMPOSE_OVERLAY=%s\n" "$COMPOSE_OVERLAY"
     else
       mkdir -p "$dropin"
-      printf "[Service]\nEnvironment=COMPOSE_OVERLAY=%s\nEnvironment=IMAGE_TAG=%s\n" "$COMPOSE_OVERLAY" "$tag" > "$dropin/overlay.conf"
+      printf "[Service]\nEnvironment=COMPOSE_OVERLAY=%s\n" "$COMPOSE_OVERLAY" > "$dropin/overlay.conf"
       echo "  wrote $dropin/overlay.conf"
     fi
   fi
