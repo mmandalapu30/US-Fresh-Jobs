@@ -82,6 +82,18 @@ fi
 
 # 1. Pull whatever the source has published since we last looked.
 #
+# Bounded to the newest few files. discover() returns every delta file the source has ever
+# published -- 59 were pending on this deployment -- and the pipeline walks them oldest
+# first, so an unbounded run begins on a file from months back. That file is both the most
+# expensive to process and the least useful: PURGE_AFTER_DAYS deletes anything posted more
+# than a fortnight ago, so its rows are removed the same night they are inserted. It is
+# also big enough to exhaust a small host, and an OOM-killed worker never finalises its
+# sync_runs row -- the abandoned row then holds the per-source lock for the full 120-minute
+# reclaim window and blocks the admin console's fetch button along with it. --max-files
+# keeps the NEWEST N pending files, which is what "today's jobs" means here. Raise it (or
+# call scripts/ingest.py --since directly) to backfill deliberately.
+INGEST_MAX_FILES="${INGEST_MAX_FILES:-3}"
+#
 # Retried, because the source resets connections and times out reads often enough to end a
 # run on its own (about 1 request in 8 from one observed host). Retrying resumes rather
 # than redoing: sync_files checkpoints every completed file, so a second attempt skips
@@ -89,7 +101,7 @@ fi
 attempts=3
 for attempt in $(seq 1 $attempts); do
   log "ingesting (attempt $attempt of $attempts)..."
-  run_step scripts/ingest.py --trigger SCHEDULED
+  run_step scripts/ingest.py --trigger SCHEDULED --max-files "$INGEST_MAX_FILES"
   code=$?
 
   if [ $code -eq 0 ]; then
