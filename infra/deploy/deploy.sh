@@ -148,6 +148,29 @@ if ! git merge --ff-only "$target" >/dev/null 2>&1; then
 fi
 log "now at $(git rev-parse --short HEAD)"
 
+# The pinned tag follows the commit. Nothing else advanced it: this script only ever
+# rewound IMAGE_TAG on rollback, so a host that pins one kept pulling the previous
+# release's images while git moved on. Seen in production as an ingest four commits behind
+# the api and web beside it, with a deploy reporting success every time -- it had
+# faithfully pulled exactly the tag it was told to.
+#
+# PREVIOUS_TAG was captured further up, so rollback still restores the old tag.
+if [ -n "$COMPOSE_OVERLAY" ]; then
+  IMAGE_TAG="sha-$(git rev-parse HEAD)"      # images.yml publishes type=sha,format=long
+  export IMAGE_TAG
+  for f in "$ENV_FILE" ./.deploy.conf; do
+    [ -f "$f" ] || continue
+    if grep -q '^IMAGE_TAG=' "$f"; then
+      sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$IMAGE_TAG|" "$f"
+    else
+      # Appending matters on a host set up before the pin existed: a silent no-op here
+      # would leave compose resolving :latest and the deploy pinning nothing at all.
+      printf '%s\n' "IMAGE_TAG=$IMAGE_TAG" >> "$f"
+    fi
+  done
+  log "image tag now sha-$(git rev-parse --short HEAD)..."
+fi
+
 # ---------------------------------------------------------------------------------------
 if [ -n "$COMPOSE_OVERLAY" ]; then
   # This host runs published images. Building here would ignore what CI produced and,
@@ -219,4 +242,32 @@ fi
 
 log "--- healthy ---"
 docker ps --format 'table {{.Names}}\t{{.Status}}' | tee -a "$LOG"
+# ---------------------------------------------------------------------------------------
+# Timers are part of the release. Without this, a release that adds, changes or retires one
+# needs a second manual step on the server, and until somebody runs it the host keeps
+# firing the previous schedule -- a new timer silently never starts, a retired one silently
+# keeps going. Both happened at once when jobplatform-watch replaced jobplatform-catchup.
+#
+# Deliberately after the health gate: a schedule change is not worth rolling a release back
+# for, and installing units for a release that is about to be rolled back would leave the
+# host running timers from a version it is no longer on.
+if [ -n "$(git diff --name-only "$current" HEAD -- infra/systemd scripts/install-systemd.sh 2>/dev/null)" ]; then
+  log "--- schedule changed in this release, reinstalling units ---"
+  installer_rc=0
+  if [ "$(id -u)" -eq 0 ]; then
+    COMPOSE_OVERLAY="$COMPOSE_OVERLAY" ./scripts/install-systemd.sh >>"$LOG" 2>&1 || installer_rc=$?
+  elif sudo -n true 2>/dev/null; then
+    sudo -n COMPOSE_OVERLAY="$COMPOSE_OVERLAY" ./scripts/install-systemd.sh >>"$LOG" 2>&1 || installer_rc=$?
+  else
+    installer_rc=77
+  fi
+  case "$installer_rc" in
+    0)  log "units reinstalled" ;;
+    77) log "WARNING: units changed but this user cannot write them without a password."
+        log "         run: sudo COMPOSE_OVERLAY=$COMPOSE_OVERLAY ./scripts/install-systemd.sh" ;;
+    *)  log "WARNING: install-systemd.sh failed (exit $installer_rc) -- see $LOG."
+        log "         The release is healthy and serving; only the schedule is stale." ;;
+  esac
+fi
+
 log "=== deployed ${target:0:8} successfully ==="
