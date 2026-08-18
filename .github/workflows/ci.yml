@@ -2,8 +2,13 @@ name: CI
 
 on:
   pull_request:
+  # These are the branches that actually exist. `main` was listed here and matches nothing
+  # in this repository, so no push has ever run CI -- only pull requests did. That silently
+  # voided two things: the lint/test/layering/secret gate on direct pushes, and the deploy,
+  # which triggers on `workflow_run` of THIS workflow and so could never fire either.
+  # Keep this list in step with images.yml; deploy.yml gates on US-DailyJobs alone.
   push:
-    branches: [main]
+    branches: [US-DailyJobs, deploy/minio-and-worker-entrypoints]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
