@@ -9,7 +9,7 @@
 # Two timers are installed:
 #
 #   jobplatform-daily     09:00 America/New_York   ingest + retention
-#   jobplatform-catchup   11,13,15,17 same zone    ingest only, if the day is still missing
+#   jobplatform-watch     every 10 minutes         ingest only, when the source publishes
 #
 # Re-running is safe and is how you move the repo or change the slot: the units are
 # rewritten from the templates in infra/systemd/ and the timers re-enabled.
@@ -19,14 +19,21 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UNIT_SRC="$REPO/infra/systemd"
 UNIT_DIR="/etc/systemd/system"
 UNITS=(jobplatform-daily.service jobplatform-daily.timer
-       jobplatform-catchup.service jobplatform-catchup.timer
+       jobplatform-watch.service jobplatform-watch.timer
        jobplatform-backup.service jobplatform-backup.timer
        jobplatform-freshness.service jobplatform-freshness.timer
        jobplatform-ingest-requests.service jobplatform-ingest-requests.timer
        jobplatform-purge.service jobplatform-purge.timer)
-TIMERS=(jobplatform-daily.timer jobplatform-catchup.timer
+TIMERS=(jobplatform-daily.timer jobplatform-watch.timer
         jobplatform-backup.timer jobplatform-freshness.timer
         jobplatform-ingest-requests.timer jobplatform-purge.timer)
+
+# Units this installer used to write and no longer does. Removed on every install, not
+# only on --remove: a host that ran an older installer still has jobplatform-catchup.timer
+# enabled on disk, and systemd would go on firing it alongside the watcher that replaced
+# it -- two ingests racing for the same per-source lock, four times an afternoon.
+LEGACY_UNITS=(jobplatform-catchup.service jobplatform-catchup.timer)
+LEGACY_TIMERS=(jobplatform-catchup.timer)
 
 remove=0
 dry_run=0
@@ -46,6 +53,25 @@ need_root() {
   fi
 }
 
+purge_legacy() {
+  for timer in "${LEGACY_TIMERS[@]}"; do
+    [ -e "$UNIT_DIR/$timer" ] || continue
+    if [ "$dry_run" -eq 1 ]; then
+      echo "  would disable and remove superseded $timer"
+    else
+      systemctl disable --now "$timer" 2>/dev/null || true
+    fi
+  done
+  for unit in "${LEGACY_UNITS[@]}"; do
+    [ -e "$UNIT_DIR/$unit" ] || continue
+    # The drop-in directory goes too. It carries COMPOSE_OVERLAY for the ingest units, and
+    # an orphaned one left behind would be silently reused if the unit name ever returned.
+    [ "$dry_run" -eq 1 ] && { echo "  would remove superseded $unit"; continue; }
+    rm -rf "$UNIT_DIR/$unit" "$UNIT_DIR/$unit.d"
+    echo "  removed superseded $unit"
+  done
+}
+
 command -v systemctl >/dev/null 2>&1 || {
   echo "systemctl not found. This host does not use systemd; see docs/07-deployment.md §3 for the cron equivalent." >&2
   exit 1
@@ -59,6 +85,7 @@ if [ "$remove" -eq 1 ]; then
   for unit in "${UNITS[@]}"; do
     rm -f "$UNIT_DIR/$unit"
   done
+  purge_legacy
   systemctl daemon-reload
   echo "Removed the jobplatform timers."
   exit 0
@@ -84,9 +111,9 @@ if [ "$schedule_ok" -ne 1 ]; then
   cat >&2 <<'MSG'
 
 The named timezone was not accepted. That means systemd is older than 240. Either
-upgrade, or edit infra/systemd/*.timer to express the slots in UTC -- 13:00 and
-15,17,19,21:00 match 09:00 and 11,13,15,17 Eastern during daylight saving, and drift an
-hour when the US returns to standard time.
+upgrade, or edit infra/systemd/*.timer to express each slot in UTC rather than naming a
+zone. Eastern is UTC-4 under daylight saving and UTC-5 otherwise, so a fixed UTC slot is
+correct for one half of the year and an hour out for the other.
 MSG
   exit 1
 fi
@@ -97,6 +124,7 @@ fi
 }
 
 need_root
+purge_legacy
 for unit in "${UNITS[@]}"; do
   # The templates carry /srv/job-platform as the documented default. Rewrite both path
   # directives so the units are correct wherever this checkout actually lives.
@@ -123,7 +151,7 @@ for unit in "${UNITS[@]}"; do
   # name rather than to a tag that exists.
   needs_overlay=0
   case "$unit" in
-    jobplatform-daily.service|jobplatform-catchup.service|jobplatform-ingest-requests.service)
+    jobplatform-daily.service|jobplatform-watch.service|jobplatform-ingest-requests.service)
       needs_overlay=1 ;;
   esac
   if [ "$needs_overlay" -eq 1 ] && [ -n "${COMPOSE_OVERLAY:-}" ]; then
@@ -164,6 +192,6 @@ cat <<MSG
 Installed. The next primary run is listed above.
 
   logs        journalctl -u jobplatform-daily.service -f
-  catch-ups   journalctl -u jobplatform-catchup.service --since today
+  watcher     journalctl -u jobplatform-watch.service --since today
   run now     systemctl start jobplatform-daily.service
 MSG

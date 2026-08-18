@@ -118,9 +118,17 @@ check: lint layering typecheck test ## Everything CI runs
 daily: ## Pull new jobs then enforce the freshness window (the 09:00 scheduled target)
 	./scripts/daily.sh
 
+.PHONY: watch
+watch: ## Ingest only, and only if the source has published a file we do not have
+	./scripts/daily.sh --watch
+
 .PHONY: catch-up
 catch-up: ## Ingest only, and only if today's file has not already landed
 	./scripts/daily.sh --catch-up
+
+.PHONY: has-new
+has-new: ## Ask whether the source has published a new file (exit 1 yes, 0 no)
+	python scripts/has_new_file.py
 
 .PHONY: have-today
 have-today: ## Ask whether today's delta file is already ingested (exit 0 yes, 1 no)

@@ -103,26 +103,34 @@ sudo ./scripts/install-systemd.sh
 | Timer | When (America/New_York) | Does |
 |---|---|---|
 | `jobplatform-daily` | 09:00 daily | ingest, then retention |
-| `jobplatform-catchup` | 11:00, 13:00, 15:00, 17:00 | ingest **only if today's file is still missing** |
+| `jobplatform-watch` | every 10 minutes | ingest **only when the source has published a new file** |
 
-**Why 09:00 needs the catch-ups.** The source publishes each day's file somewhere between
-06:33 and 14:15 UTC and the hour genuinely varies (`docs/00-source-verification.md` §5).
-09:00 Eastern is 13:00 UTC in summer and 14:00 UTC in winter — inside that window, not
-after it. So the primary run lands before the file exists on a fair share of days. On its
-own that is not data loss, because `discover()` diffs the remote listing against our
-checkpoints and the next run collects whatever was missed — but "the next run" is
-tomorrow, and the board would show yesterday's jobs all day.
+**Why the watcher exists.** The source publishes each day's file somewhere between 06:33
+and 14:15 UTC and the hour genuinely varies (`docs/00-source-verification.md` §5). 09:00
+Eastern is 13:00 UTC in summer and 14:00 UTC in winter — inside that window, not after it.
+So the primary run lands before the file exists on a fair share of days. On its own that is
+not data loss, because `discover()` diffs the remote listing against our checkpoints and
+the next run collects whatever was missed — but "the next run" would be tomorrow, and the
+board would show yesterday's jobs all day.
 
-The afternoon passes close that to hours. They are close to free: each one asks
-`scripts/have_todays_file.py` a single indexed question, and once the day's file is in it
-stops there — no directory listing, no download, no `sync_runs` row.
+No calendar slot fixes that, because the thing being waited on moves. An early slot runs
+before the file exists; a late one leaves the day's jobs unfetched for hours. So the
+watcher does not guess: it asks the source what it has, every ten minutes, and ingests
+when the newest published file is not yet in. Worst case the board is ten minutes behind
+publication rather than up to a day.
+
+An idle pass costs one directory listing and nothing else — `scripts/has_new_file.py`
+compares that listing against `sync_files` and exits, opening no `sync_runs` row and
+taking no per-source lock, so it never blocks the admin console's fetch button.
+
+It asks about the *newest* file specifically, not about anything unprocessed. The
+scheduled ingest is bounded to the newest few files (`INGEST_MAX_FILES`), so older ones
+stay unprocessed by design; a watcher that fired on any unprocessed file would fire on
+every pass forever and never settle. Use `--window N` to also notice a backfilled gap.
 
 ```
-09:00  primary   ingest + retention
-11:00  catch-up  today's file already in?  yes -> exit, no -> ingest
-13:00  catch-up  ...
-15:00  catch-up  ...
-17:00  catch-up  ...
+09:00        primary   ingest + retention
+every 10min  watch     newest published file already in?  yes -> exit, no -> ingest
 ```
 
 The timezone is named in `OnCalendar=`, not converted to a fixed offset, so 09:00 stays
@@ -135,19 +143,19 @@ expression before it writes anything, and stops with the reason if the host is t
 ```bash
 systemctl list-timers 'jobplatform-*'          # next and last elapse
 journalctl -u jobplatform-daily.service -f     # the primary run, live
-journalctl -u jobplatform-catchup.service --since today
+journalctl -u jobplatform-watch.service --since today
 systemctl start jobplatform-daily.service      # run now, out of schedule
 ./scripts/install-systemd.sh --dry-run         # what would be written, no root needed
 sudo ./scripts/install-systemd.sh --remove     # uninstall
 ```
 
-A catch-up that found nothing to do reads:
+A watch pass that found nothing to do reads:
 
 ```
-=== catch-up run starting ===
-2026-08-13: already ingested (990 rows, at 13:16 UTC)
-today's file is already in - nothing to do
-=== catch-up run finished (skipped) ===
+=== watch run starting ===
+nothing new: the newest file (2026-08-13) is ingested
+no new file at the source - nothing to do
+=== watch run finished (skipped) ===
 ```
 
 ### Cron instead
@@ -157,33 +165,40 @@ extension and is not available in every cron:
 
 ```cron
 CRON_TZ=America/New_York
-0 9      * * *  cd /srv/job-platform && COMPOSE=1 ./scripts/daily.sh            >> /var/log/jobplatform-daily.log 2>&1
-0 11-17/2 * * *  cd /srv/job-platform && COMPOSE=1 ./scripts/daily.sh --catch-up >> /var/log/jobplatform-daily.log 2>&1
+0 9     * * *  cd /srv/job-platform && COMPOSE=1 ./scripts/daily.sh         >> /var/log/jobplatform-daily.log 2>&1
+*/10 *  * * *  cd /srv/job-platform && COMPOSE=1 ./scripts/daily.sh --watch >> /var/log/jobplatform-daily.log 2>&1
 ```
 
-Without `CRON_TZ`, express the slots in UTC — `13:00` and `15,17,19,21:00` match Eastern
-during daylight saving and drift an hour when the US returns to standard time.
+Only the primary run needs `CRON_TZ`; the watcher is an interval and has no timezone to be
+wrong about. Without `CRON_TZ`, express 09:00 Eastern as `13:00` UTC — correct during
+daylight saving, an hour out when the US returns to standard time.
 
 ### What the schedule relies on
 
-Four behaviours, all of them tested:
+Five behaviours:
 
 - **Transient source failures are retried**, three attempts with a 60s/120s backoff. The
   source resets connections and times out reads often enough to end a run on its own
   (roughly 1 request in 8 from one observed host). Retrying resumes rather than redoes:
   `sync_files` checkpoints each completed file.
 - **Overlapping runs are refused, not duplicated.** If a slow primary run is still going
-  when the 11:00 catch-up fires, the catch-up is refused the per-source lock, logs
+  when a watch pass fires, the pass is refused the per-source lock, logs
   `another ingest is already running` and exits 0. The timers are deliberately not
   `Conflicts=` with each other — the database lock is the better arbiter, because it
-  refuses the newcomer instead of killing a run mid-write.
-- **An unknown answer never skips a day.** If `have_todays_file.py` cannot reach the
-  database it exits 2, and the catch-up ingests anyway. Failing closed there would turn a
-  transient database blip into a silently skipped day.
+  refuses the newcomer instead of killing a run mid-write. The watch timer measures its
+  interval from the end of the last run, so passes cannot stack up behind a slow one.
+- **An unknown answer never skips a day.** If `has_new_file.py` cannot reach the source or
+  the database it exits 2, and the pass ingests anyway. Failing closed there would turn a
+  transient blip into a silently skipped day.
+- **A killed run does not wedge the schedule.** An OOM-killed worker cannot finalise its
+  `sync_runs` row, and that row holds the per-source lock until `reclaim_stale_runs`
+  retires it after 120 minutes — during which every pass, and the admin console's fetch
+  button, is refused. Keeping each run inside its memory budget (`INGEST_MAX_FILES`,
+  `INGEST_ROW_GROUP_BATCH_SIZE`, `MEM_INGEST`) is what keeps that from happening.
 - **Retention being switched off is not a failure.** With `RETENTION_MAX_POSTED_AGE_DAYS=0`
   (the default) the step exits 2 and is skipped, rather than failing the run after a
-  perfectly good ingest. Retention runs only in the 09:00 pass; repeating it four times
-  could not remove anything the first pass had not.
+  perfectly good ingest. Retention runs only in the 09:00 pass; repeating it on every
+  watch pass could not remove anything the first pass had not.
 
 `/admin` shows the same run history in the browser.
 

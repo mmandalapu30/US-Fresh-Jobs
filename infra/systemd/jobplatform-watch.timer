@@ -1,0 +1,26 @@
+# Every ten minutes, all day.
+#
+# The interval is the worst-case delay between the source publishing and the board showing
+# it, so it is set by how fresh the site should feel rather than by the publisher's window
+# -- which moves, and which a fixed window would eventually sit outside of.
+#
+# Ten minutes is affordable because an idle pass is one directory listing against the
+# source and nothing else. Shortening it further buys little: the ingest itself takes
+# minutes, so the delay is dominated by the run, not by the wait.
+
+[Unit]
+Description=Watch the source for a newly published file
+
+[Timer]
+# Relative to the last run rather than to a calendar, so a pass that takes minutes does not
+# stack up behind one that is still going.
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=30s
+
+# Not Persistent=. A watch pass missed while the machine was off is not worth replaying on
+# boot: OnBootSec= runs one shortly after start-up anyway, and it will find whatever landed
+# during the outage. The primary unit is Persistent=true and covers retention for the day.
+
+[Install]
+WantedBy=timers.target

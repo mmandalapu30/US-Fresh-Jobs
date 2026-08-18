@@ -4,13 +4,19 @@
 # On a server this is invoked by systemd timers (or cron) against the production stack:
 #
 #   09:00 America/New_York   ./scripts/daily.sh              primary run, ingest + retention
-#   11,13,15,17 same zone    ./scripts/daily.sh --catch-up   ingest only, if the day is still missing
+#   every 10 minutes         ./scripts/daily.sh --watch      ingest only, when a new file is published
+#   on demand                ./scripts/daily.sh --catch-up   ingest only, if today's file is still missing
 #
-# 09:00 Eastern is 13:00 UTC (14:00 while the US is on standard time). The source
-# publishes each day's file between roughly 06:30 and 14:15 UTC and the hour genuinely
-# varies, so a single morning slot lands before the file exists on a fair share of days.
-# The catch-up passes close that gap within the same day. They are cheap: each asks one
-# indexed question of the database and stops there once the day's file is in.
+# The source publishes each day's file between roughly 06:30 and 14:15 UTC and the hour
+# genuinely varies, so no calendar slot is the right one: an early slot runs before the
+# file exists, a late slot leaves the day's jobs unfetched for hours. --watch asks the
+# source itself instead -- scripts/has_new_file.py, one directory listing -- and ingests
+# within a timer interval of publication. It supersedes the fixed afternoon catch-up
+# slots; --catch-up remains for a manual re-check of today specifically.
+#
+# 09:00 Eastern is 13:00 UTC, 14:00 while the US is on standard time. The primary run
+# stays on the calendar because retention is a once-a-day decision rather than a
+# reaction to a file landing.
 #
 # A missed or early run self-heals regardless -- discover() diffs the remote listing
 # against our checkpoints, so nothing is skipped forever.
@@ -24,16 +30,19 @@ cd "$(dirname "$0")/.."
 # not remove anything the first pass had not already removed, and would bury the one log
 # line that matters under three that never do anything.
 catch_up=0
+watch=0
 for arg in "$@"; do
   case "$arg" in
     --catch-up) catch_up=1 ;;
-    -h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
-    *) echo "unknown argument: $arg (expected --catch-up)" >&2; exit 64 ;;
+    --watch)    watch=1 ;;
+    -h|--help)  sed -n '2,24p' "$0"; exit 0 ;;
+    *) echo "unknown argument: $arg (expected --watch or --catch-up)" >&2; exit 64 ;;
   esac
 done
 
 label="daily"
 [ "$catch_up" = "1" ] && label="catch-up"
+[ "$watch" = "1" ] && label="watch"
 
 log() { echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')  $*"; }
 
@@ -77,6 +86,22 @@ if [ "$catch_up" = "1" ]; then
        log "=== $label run finished (skipped) ==="
        exit 0 ;;
     2) log "could not confirm today's file - ingesting anyway" ;;
+  esac
+fi
+
+# 0b. Watch guard. Asks the source what it has rather than the database what we took, so
+#     a backfilled gap or a corrected republish counts as work even though today's file
+#     is already in. Costs one directory listing per idle pass and, unlike running the
+#     pipeline to find out, opens no sync run and takes no per-source lock.
+#
+#     Exit 2 falls through for the same reason it does above: unknown must mean ingest.
+if [ "$watch" = "1" ]; then
+  run_step scripts/has_new_file.py
+  case $? in
+    0) log "no new file at the source - nothing to do"
+       log "=== $label run finished (skipped) ==="
+       exit 0 ;;
+    2) log "could not reach the source - ingesting anyway" ;;
   esac
 fi
 
@@ -127,7 +152,10 @@ for attempt in $(seq 1 $attempts); do
   sleep $wait_for
 done
 
-if [ "$catch_up" = "1" ]; then
+# Ingest-only modes stop here. Retention is a once-a-day decision and stays with the
+# primary run: repeating it on every watch pass could not remove anything the first pass
+# had not already removed, and would bury the one log line that matters.
+if [ "$catch_up" = "1" ] || [ "$watch" = "1" ]; then
   log "=== $label run finished OK ==="
   exit 0
 fi

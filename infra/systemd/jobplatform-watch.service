@@ -1,0 +1,35 @@
+# Ingest as soon as the source publishes, instead of at times we guessed in advance.
+#
+# The publisher's upload hour moves across roughly 06:33-14:15 UTC, so no calendar slot is
+# the right one. This unit asks the source what it has (scripts/has_new_file.py, one
+# directory listing) and runs the ingest only when the newest published file is not yet in.
+# An idle pass is that one listing: no sync_runs row, no per-source lock, nothing for an
+# operator to read past in the dashboard.
+#
+# Replaces jobplatform-catchup.*, which polled the database four times an afternoon and so
+# could leave a day's jobs unfetched for up to two hours after they appeared.
+
+[Unit]
+Description=US Fresh Jobs - ingest when the source publishes a new file
+Documentation=file:///srv/job-platform/docs/07-deployment.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/job-platform
+Environment=COMPOSE=1
+ExecStart=/srv/job-platform/scripts/daily.sh --watch
+TimeoutStartSec=3h
+
+# Deliberately not Conflicts= with the primary unit. If a slow primary run is still going
+# when a watch pass fires, the pass asks the database for the per-source lock, is refused,
+# logs "another ingest is already running" and exits 0. That is a cleaner outcome than
+# systemd killing one of the two mid-write.
+
+#User=deploy
+#Group=docker
+
+StandardOutput=journal
+StandardError=journal
