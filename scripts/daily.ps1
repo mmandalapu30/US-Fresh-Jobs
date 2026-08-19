@@ -4,6 +4,9 @@
 #     .\scripts\daily.ps1              primary run: ingest + retention
 #     .\scripts\daily.ps1 -CatchUp     ingest only, and only if today's file is missing
 #
+# Set INGEST_MAX_FILES to change how many of the newest pending files one run pulls.
+# Default 3, the same as scripts/daily.sh -- keep the two in step.
+#
 # The source publishes each day's file between roughly 06:30 and 14:15 UTC and the hour
 # varies, so one fixed morning slot lands before the file exists on a fair share of days.
 # -CatchUp is the afternoon re-check that closes the gap within the same day; it asks one
@@ -131,10 +134,25 @@ try {
     # single reset anywhere in a multi-file run kills the whole run. Retrying resumes
     # rather than redoing: sync_files checkpoints each completed file, and the pipeline
     # reclaims the stale RUNNING row a killed process leaves behind.
+
+    # Bounded to the newest few files. discover() returns every delta file the source has
+    # ever published -- 82 of them -- and the pipeline walks them oldest first, so an
+    # unbounded run begins on a file from months back. That file is both the most
+    # expensive to process and the least useful: PURGE_AFTER_DAYS deletes anything posted
+    # more than a fortnight ago, so its rows are removed the same night they are inserted.
+    # On a small host it is also big enough to exhaust memory, and an OOM-killed worker
+    # never finalises its sync_runs row -- the abandoned row then holds the per-source
+    # lock for the full 120-minute reclaim window and blocks every later run with it.
+    #
+    # This was left unbounded when scripts/daily.sh was bounded, and the scheduled task
+    # duly pulled all 77 pending files in a single 1h38m run. Two runners for one job is
+    # already a hazard; two runners that disagree about scope is the bug that follows.
+    $maxFiles = if ($env:INGEST_MAX_FILES) { $env:INGEST_MAX_FILES } else { "3" }
+
     $maxAttempts = 3
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         Write-Log "ingesting (attempt $attempt of $maxAttempts)..."
-        $code = Invoke-Step @("scripts/ingest.py", "--trigger", "SCHEDULED")
+        $code = Invoke-Step @("scripts/ingest.py", "--trigger", "SCHEDULED", "--max-files", $maxFiles)
         if ($code -eq 0) { break }
         if ($code -eq 3) {
             # Another ingest holds the lock. Retrying is pointless -- the reclaim guard is
