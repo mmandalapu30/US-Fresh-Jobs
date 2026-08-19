@@ -66,6 +66,47 @@ jobs:
             exit 1
           fi
 
+      # CI and Images both start on a push and run in parallel. This workflow gates on CI,
+      # which is lint and tests and finishes quickly; Images is a multi-arch docker build
+      # and finishes later. Deploying in between pins a tag the registry does not have yet,
+      # and deploy.sh writes IMAGE_TAG before it pulls -- so the failure also leaves the
+      # server pointing at an image it never fetched.
+      #
+      # Observed on 70ce5b2: CI green at 18:50:18, deploy failed on the pull at 18:50:29,
+      # Images finished at 18:53:38. A perfectly good release, failed by three minutes.
+      #
+      # Waiting on the run rather than polling for a tag, because the tag deploy.sh pins is
+      # not always this commit: it is the newest commit touching image content, so for a
+      # docs-only release no Images run exists and there is nothing to wait for.
+      - name: Wait for the image build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          # One Images run per commit; read its state rather than guessing at a tag.
+          jq_state='[.workflow_runs[] | select(.name == "Images")][0] | if . == null then "absent" else "\(.status) \(.conclusion)" end'
+          for attempt in $(seq 1 40); do
+            state="$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=$SHA" --jq "$jq_state" 2>/dev/null || echo unknown)"
+            case "$state" in
+              absent)
+                echo "no Images run for $SHA -- this release changed nothing in an image"
+                exit 0 ;;
+              "completed success")
+                echo "images published for $SHA"
+                exit 0 ;;
+              completed*)
+                echo "::error::the Images run for $SHA concluded: ${state#completed }"
+                exit 1 ;;
+              unknown)
+                echo "could not read workflow state (attempt $attempt) -- retrying" ;;
+              *)
+                echo "Images is $state (attempt $attempt of 40)" ;;
+            esac
+            sleep 30
+          done
+          echo "::error::the Images run for $SHA did not finish within 20 minutes"
+          exit 1
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
