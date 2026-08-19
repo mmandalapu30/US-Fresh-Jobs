@@ -153,9 +153,9 @@ export default async function JobsPage({ searchParams }: { searchParams: Search 
       <Filters
         current={current}
         states={states}
+        seniorities={selectedSeniorities}
         extraParams={{
           category: selectedCategories,
-          seniority: selectedSeniorities,
           industry: selectedIndustries,
         }}
       />
