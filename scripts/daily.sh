@@ -117,7 +117,26 @@ fi
 # reclaim window and blocks the admin console's fetch button along with it. --max-files
 # keeps the NEWEST N pending files, which is what "today's jobs" means here. Raise it (or
 # call scripts/ingest.py --since directly) to backfill deliberately.
-INGEST_MAX_FILES="${INGEST_MAX_FILES:-3}"
+#
+# Watch takes ONE file, not three, and that is the whole point of the distinction.
+# --max-files selects the newest N pending, but the pipeline then walks the selection
+# oldest-first, so on a host carrying a backlog the newest file is processed LAST. On
+# 2026-08-21 that starved the only file anyone wanted: the day's own delta published at
+# 14:17, the watch pass picked it up five minutes later, and the run went to 07-23
+# (304 MB) and 07-24 (295 MB) first and was OOM-killed before it ever opened 08-21. The
+# file was selected by every run that day and read by none of them.
+#
+# One file removes the starvation without reordering anything. Processing order has to
+# stay oldest-first: the loader decides an update by comparing content_hash for
+# inequality, with no timestamp guard, so replaying an older file after a newer one
+# would overwrite the newer row with stale content rather than skip it.
+#
+# Backfill is the daily run's job, where three-at-a-time and oldest-first are both right.
+if [ "$watch" = "1" ]; then
+  INGEST_MAX_FILES="${INGEST_WATCH_MAX_FILES:-1}"
+else
+  INGEST_MAX_FILES="${INGEST_MAX_FILES:-3}"
+fi
 #
 # Retried, because the source resets connections and times out reads often enough to end a
 # run on its own (about 1 request in 8 from one observed host). Retrying resumes rather
