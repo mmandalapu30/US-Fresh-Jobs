@@ -143,7 +143,9 @@ class IngestionPipeline:
 
         if reclaim_stale:
             # A worker killed by OOM leaves a RUNNING row that blocks every future run.
-            self._sync.reclaim_stale_runs(source)
+            self._sync.reclaim_stale_runs(
+                source, older_than_minutes=self._settings.ingest_stale_run_reclaim_minutes
+            )
 
         try:
             run = self._sync.start_run(source, trigger=trigger)

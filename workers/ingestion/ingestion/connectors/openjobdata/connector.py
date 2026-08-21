@@ -34,7 +34,8 @@ from ..base import (
     ValidationResult,
 )
 from .schema import (
-    COMPANY_COLUMNS,
+    COMPANY_BATCH_ROWS,
+    COMPANY_LOOKUP_COLUMNS,
     JOB_COLUMNS_FULL,
     JOB_COLUMNS_MINIMAL,
     SOURCE_NAME,
@@ -424,19 +425,54 @@ class OpenJobDataConnector:
             return None
 
     def _load_companies(self) -> dict[int, dict[str, Any]]:
-        """Load and cache the company lookup (109k rows, ~16 MB).
+        """Load and cache the company lookup (109k rows).
 
         Loaded once per connector instance: a per-row remote lookup would be absurd, and
-        the table is small enough to hold in memory for the life of a run.
+        the table is small enough to hold in memory for the life of a run -- but only if
+        it is built the way this does it.
+
+        Two properties keep the peak flat, both of which the previous ``read()`` +
+        ``to_pylist()`` version violated:
+
+        * **Decoded in batches.** ``to_pylist()`` built a Python list of every row before
+          the loop began, so the Arrow table, that full list, and the growing dict were
+          all resident at once -- three copies of the same 109k rows at the moment of
+          peak. ``iter_batches`` holds one ``COMPANY_BATCH_ROWS`` slice instead.
+        * **Only what is read is retained.** ``normalize()`` touches six fields; the
+          registry used to pin all eleven for the life of the run.
+
+        Low-cardinality values are interned as they are built. ``industry``, ``size`` and
+        ``country`` repeat heavily across 109k rows, and a decoded Parquet batch hands
+        back a fresh ``str`` for every one of them.
         """
         if self._company_cache is not None:
             return self._company_cache
 
         import pyarrow.parquet as pq
 
+        cache: dict[int, dict[str, Any]] = {}
+        pool: dict[str, str] = {}
+
         try:
             with self.filesystem.open(self._paths.companies_path, "rb") as handle:
-                table = pq.ParquetFile(handle).read(columns=list(COMPANY_COLUMNS))
+                reader = pq.ParquetFile(handle)
+                for batch in reader.iter_batches(
+                    batch_size=COMPANY_BATCH_ROWS,
+                    columns=["id", *COMPANY_LOOKUP_COLUMNS],
+                ):
+                    identifiers = batch.column("id").to_pylist()
+                    columns = {
+                        name: batch.column(name).to_pylist() for name in COMPANY_LOOKUP_COLUMNS
+                    }
+                    for index, identifier in enumerate(identifiers):
+                        if identifier is None:
+                            continue
+                        cache[int(identifier)] = {
+                            name: _pooled(columns[name][index], pool)
+                            if name in _POOLED_COMPANY_FIELDS
+                            else columns[name][index]
+                            for name in COMPANY_LOOKUP_COLUMNS
+                        }
         except Exception as exc:
             # A missing company lookup degrades data quality but must not abort ingestion:
             # jobs still carry company_external_id and can be enriched later.
@@ -446,14 +482,7 @@ class OpenJobDataConnector:
             self._company_cache = {}
             return self._company_cache
 
-        cache: dict[int, dict[str, Any]] = {}
-        for row in table.to_pylist():
-            identifier = row.get("id")
-            if identifier is None:
-                continue
-            cache[int(identifier)] = row
-
-        logger.info("openjobdata.companies.loaded", count=len(cache))
+        logger.info("openjobdata.companies.loaded", count=len(cache), distinct_pooled=len(pool))
         self._company_cache = cache
         return cache
 
@@ -519,6 +548,30 @@ class OpenJobDataConnector:
 
 
 # --------------------------------------------------------------------------- helpers
+
+
+#: Company fields worth interning while the registry is built.
+#:
+#: These three are categorical -- a few hundred distinct values across 109k rows -- so
+#: pooling collapses ~327k separate strings down to the distinct set. The remaining
+#: fields (name, website, career_url) are effectively unique per company, where pooling
+#: would add a dict entry per row and save nothing.
+_POOLED_COMPANY_FIELDS: frozenset[str] = frozenset({"industry", "size", "country"})
+
+
+def _pooled(value: object, pool: dict[str, str]) -> Any:
+    """Return a single shared instance per distinct string.
+
+    ``sys.intern`` is not used: it only accepts ``str`` and its table lives for the life
+    of the process, whereas this pool is released with the connector.
+    """
+    if not isinstance(value, str):
+        return value
+    existing = pool.get(value)
+    if existing is not None:
+        return existing
+    pool[value] = value
+    return value
 
 
 def _clean_text(value: object) -> str | None:

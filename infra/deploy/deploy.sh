@@ -55,6 +55,20 @@ die() { log "FAILED: $*"; exit 1; }
 
 COMPOSE_ARGS="-f $COMPOSE_FILE"
 [ -n "$COMPOSE_OVERLAY" ] && COMPOSE_ARGS="$COMPOSE_ARGS -f $COMPOSE_OVERLAY"
+
+# Services to bring up. An overlay can retune a service but cannot delete one, so the
+# small-host overlay keeps MinIO out of the deployment by naming the services explicitly
+# -- see its header. `up -d` with no list ignores that and starts MinIO anyway, which on
+# the 3.7 GB host reserved 1 GB (of a 4.2 GB total against 3.7 GB of RAM) for a container
+# that by design never receives a request: the small overlay points object storage at
+# file:///data/archive instead. The result was a host in swap whenever the ingest ran.
+#
+# Empty means "everything the compose files define", which is correct without an overlay.
+# Override DEPLOY_SERVICES in .deploy.conf for a host that wants a different set.
+if [ -z "${DEPLOY_SERVICES+set}" ] && [ -n "$COMPOSE_OVERLAY" ]; then
+  DEPLOY_SERVICES="postgres redis api web caddy"
+fi
+DEPLOY_SERVICES="${DEPLOY_SERVICES:-}"
 # shellcheck disable=SC2086  # a list of arguments, not one argument
 C="docker compose $COMPOSE_ARGS --env-file $ENV_FILE"
 
@@ -75,7 +89,8 @@ if [ "$mode" = "rollback" ]; then
   for img in $IMAGES; do
     docker tag "${img}:rollback" "${img}:latest"
   done
-  $C up -d --no-build || die "rollback failed to start containers"
+  # shellcheck disable=SC2086  # a service list, not one argument
+  $C up -d --no-build $DEPLOY_SERVICES || die "rollback failed to start containers"
   log "rolled back. NOTE: any migration this release applied is still applied."
   exit 0
 fi
@@ -197,7 +212,8 @@ if [ -n "$migrations" ]; then
 fi
 
 log "--- starting new containers ---"
-$C up -d || die "containers failed to start"
+# shellcheck disable=SC2086  # a service list, not one argument
+$C up -d $DEPLOY_SERVICES || die "containers failed to start"
 
 # ---------------------------------------------------------------------------------------
 # Health gate. `up -d` exiting 0 only means Docker accepted the containers; it says nothing
@@ -236,7 +252,8 @@ if [ "$healthy" -ne 1 ]; then
     done
   fi
   git checkout -q "$current" 2>/dev/null || true
-  if $C up -d --no-build; then
+  # shellcheck disable=SC2086  # a service list, not one argument
+  if $C up -d --no-build $DEPLOY_SERVICES; then
     log "rolled back to ${current:0:8}"
   else
     log "ROLLBACK ALSO FAILED -- manual intervention needed"

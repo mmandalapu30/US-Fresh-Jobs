@@ -223,13 +223,18 @@ class SyncRepository:
             )
         logger.info("sync.run.finished", sync_run_id=run_id, status=status.value)
 
-    def reclaim_stale_runs(self, source: str, *, older_than_minutes: int = 120) -> int:
+    def reclaim_stale_runs(self, source: str, *, older_than_minutes: int = 30) -> int:
         """Mark long-abandoned RUNNING rows as FAILED.
 
         A worker killed by OOM or a node restart leaves a RUNNING row that would block
         every future run through the one-active-per-source index. This releases the lock
         without hiding the failure: the row becomes FAILED, so the incident stays visible
         in the admin dashboard.
+
+        The window is the dead time a crash costs, so the pipeline passes
+        ``ingest_stale_run_reclaim_minutes`` rather than relying on this default. It must
+        stay comfortably above the longest legitimate run: reclaiming a live worker's row
+        frees the lock for a second run that will then collide on the provenance UNIQUE.
         """
         with self._engine.begin() as conn:
             result = conn.execute(

@@ -13,7 +13,9 @@ from datetime import date
 from typing import Any, Final
 
 __all__ = [
+    "COMPANY_BATCH_ROWS",
     "COMPANY_COLUMNS",
+    "COMPANY_LOOKUP_COLUMNS",
     "DELTA_FILENAME_RE",
     "JOB_COLUMNS_FULL",
     "JOB_COLUMNS_MINIMAL",
@@ -67,6 +69,28 @@ COMPANY_COLUMNS: Final[tuple[str, ...]] = (
     "country",
     "linkedin_url",
 )
+
+#: The subset of ``COMPANY_COLUMNS`` the registry actually keeps in memory.
+#:
+#: ``normalize()`` reads exactly these six fields off a company row. The other five are
+#: read from the footer only to document the source schema; retaining them cost roughly
+#: half the registry's resident size for values nothing downstream ever looked at.
+#: ``id`` is excluded because it becomes the dict key rather than part of the value.
+COMPANY_LOOKUP_COLUMNS: Final[tuple[str, ...]] = (
+    "name",
+    "website",
+    "career_url",
+    "industry",
+    "size",
+    "country",
+)
+
+#: Rows pulled off the companies Parquet per batch while building the registry.
+#:
+#: Bounds the transient decode buffer. ``read()`` + ``to_pylist()`` materialised all
+#: 109k rows at once -- the Arrow table, a complete Python list, and the growing dict all
+#: resident together -- which is what pushed a run past its cgroup limit on a small host.
+COMPANY_BATCH_ROWS: Final = 8192
 
 #: Delta files are named exactly ``YYYY-MM-DD.parquet``.
 DELTA_FILENAME_RE: Final = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})\.parquet$")

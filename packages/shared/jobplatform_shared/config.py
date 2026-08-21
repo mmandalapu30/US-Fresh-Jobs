@@ -119,6 +119,15 @@ class Settings(BaseSettings):
     ingest_upsert_chunk_size: int = Field(default=5_000, ge=100, le=100_000)
     ingest_max_future_posted_at_hours: int = Field(default=24, ge=0, le=8760)
     ingest_min_posted_at_year: int = Field(default=2000, ge=1970, le=2100)
+    #: How long a RUNNING sync run may sit untouched before the next run reclaims it.
+    #:
+    #: A worker killed by the OOM reaper never finalises its row, and that row holds the
+    #: one-active-per-source lock until this window elapses -- blocking every scheduled
+    #: run and the admin console's fetch button along with it. So this is the true cost
+    #: of a crash, and it wants to be a small multiple of a normal run rather than a
+    #: round number: the longest legitimate run observed on the small host was ~16
+    #: minutes (a manual backfill), against 2-5 for a scheduled one.
+    ingest_stale_run_reclaim_minutes: int = Field(default=30, ge=5, le=1440)
     lifecycle_removed_after_days: int = Field(default=14, ge=1, le=365)
 
     # ---- observability ----------------------------------------------------------
