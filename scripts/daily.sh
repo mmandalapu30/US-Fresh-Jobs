@@ -73,6 +73,21 @@ run_step() {
 
 log "=== $label run starting ==="
 
+# 0a. Release the lock before anything can decide there is nothing to do.
+#
+# The pipeline reclaims abandoned runs itself, but only once it is running -- and the
+# guards below return first on most passes, so on an idle watch pass nothing ever calls
+# it. That is precisely the pass that needs to: a worker killed by the OOM reaper leaves
+# a RUNNING row holding the per-source lock, the guard then answers "no new file" every
+# ten minutes without looking at it, and the corpse survives until the next pass that
+# actually ingests -- the following day's scheduled run. The reclaim window was doing
+# nothing for that case because nothing consulted it. Observed on 2026-08-22: run 51 died
+# at 13:03 and was still RUNNING, and still blocking the console, an hour and a half later.
+#
+# Cheap and unconditional: one short-lived container that touches a single indexed
+# predicate, on a path that already starts a container for the guard.
+run_step scripts/ingest.py --reclaim-only || log "reclaim failed (continuing)"
+
 # 0. Catch-up guard. Exit 0 means the day is already done, and re-checking the remote
 #    listing to learn that would cost a network round trip and a sync_runs row per pass.
 #
@@ -137,6 +152,33 @@ if [ "$watch" = "1" ]; then
 else
   INGEST_MAX_FILES="${INGEST_MAX_FILES:-3}"
 fi
+
+# Do not fetch a file whose every row retention deletes the same night.
+#
+# discover() returns all 84 deltas the publisher has ever produced, so "the newest N
+# pending" walks backwards through a backlog that reaches to May. Those files are not
+# merely useless, they are the expensive ones: they average 259 MB, they are what the
+# OOM reaper kept killing (07-19, 07-20 and 07-24 on 2026-08-22), and every row they
+# insert is older than the 15-day purge window and is deleted within hours. The purge
+# log shows both halves of that loop -- 8,610 rows deleted at 08:30, then 7,897 more
+# out of window by 20:21, re-inserted by the backfill in between.
+#
+# Bounding discovery to the purge window makes the backlog vanish from `pending` instead
+# of being worked through, so the scheduled run only ever handles files that can still
+# contribute a job to the board.
+#
+# It must not be tighter than the purge window: a file inside the window carries rows
+# that survive, and skipping it would lose them permanently. Keep the two in step.
+INGEST_SINCE_DAYS="${INGEST_SINCE_DAYS:-${PURGE_AFTER_DAYS:-15}}"
+INGEST_SINCE="$(date -u -d "-${INGEST_SINCE_DAYS} days" +%F 2>/dev/null)"
+if [ -n "$INGEST_SINCE" ]; then
+  SINCE_ARG="--since $INGEST_SINCE"
+  log "ingest window: files on or after $INGEST_SINCE (${INGEST_SINCE_DAYS}d)"
+else
+  # date(1) without GNU -d. Better to ingest the backlog than to skip a real file.
+  SINCE_ARG=""
+  log "WARNING: cannot compute the ingest window -- discovering every published file"
+fi
 #
 # Retried, because the source resets connections and times out reads often enough to end a
 # run on its own (about 1 request in 8 from one observed host). Retrying resumes rather
@@ -145,7 +187,8 @@ fi
 attempts=3
 for attempt in $(seq 1 $attempts); do
   log "ingesting (attempt $attempt of $attempts)..."
-  run_step scripts/ingest.py --trigger SCHEDULED --max-files "$INGEST_MAX_FILES"
+  # shellcheck disable=SC2086  # SINCE_ARG is a flag plus value, or empty
+  run_step scripts/ingest.py --trigger SCHEDULED --max-files "$INGEST_MAX_FILES" $SINCE_ARG
   code=$?
 
   if [ $code -eq 0 ]; then

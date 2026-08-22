@@ -32,6 +32,11 @@ def main() -> int:
     parser.add_argument(
         "--trigger", default="MANUAL", choices=["SCHEDULED", "MANUAL", "BACKFILL", "RETRY"]
     )
+    parser.add_argument(
+        "--reclaim-only",
+        action="store_true",
+        help="release abandoned RUNNING rows and exit; ingest nothing",
+    )
     args = parser.parse_args()
 
     from jobplatform_schemas import SyncTrigger
@@ -45,7 +50,27 @@ def main() -> int:
     from ingestion.pipeline import IngestionPipeline
 
     connector = OpenJobDataConnector(settings)
-    pipeline = IngestionPipeline(connector, get_sync_engine(settings), settings=settings)
+    engine = get_sync_engine(settings)
+
+    # Lock hygiene on its own, reachable without doing any work.
+    #
+    # IngestionPipeline.run() reclaims abandoned runs before it starts, which is useless
+    # on exactly the passes that need it most: the watch guard answers "no new file" and
+    # returns before a pipeline is ever built, so nothing calls the reclaim. A worker
+    # killed mid-run therefore held the lock not for the reclaim window but until the
+    # next pass that actually ingested -- the following day's scheduled run. Shortening
+    # the window did nothing for that, because the window was never being consulted.
+    if args.reclaim_only:
+        from ingestion.repositories import SyncRepository
+
+        released = SyncRepository(engine).reclaim_stale_runs(
+            connector.get_source_name(),
+            older_than_minutes=settings.ingest_stale_run_reclaim_minutes,
+        )
+        print(f"reclaimed {released} abandoned run(s)")
+        return 0
+
+    pipeline = IngestionPipeline(connector, engine, settings=settings)
 
     started = time.perf_counter()
     report = pipeline.run(
