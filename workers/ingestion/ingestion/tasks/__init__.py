@@ -1,1 +1,1 @@
-"""Placeholder package; populated in later milestones."""
+"""Celery task namespace for ingestion workers."""

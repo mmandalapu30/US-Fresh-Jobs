@@ -42,16 +42,7 @@ def _create_app() -> Celery:
         worker_max_tasks_per_child=50,
         result_expires=86400,
         broker_connection_retry_on_startup=True,
-        task_routes={
-            "ingestion.tasks.sync.*": {"queue": "ingestion"},
-            "ingestion.tasks.lifecycle.*": {"queue": "maintenance"},
-            "ingestion.tasks.alerts.*": {"queue": "notifications"},
-        },
     )
-
-    # Task modules are registered as they are implemented; autodiscovery keeps this list
-    # from becoming a place to forget things.
-    app.autodiscover_tasks(["ingestion.tasks"], force=False)
     return app
 
 
