@@ -71,13 +71,19 @@ oci iam region list --output table   # proves the credentials work
 ./infra/oracle/launch-retry.sh           # then leave it running
 ```
 
-It prints the public IP and the ssh command when capacity is granted, and stops. Anything
-that is *not* a capacity error stops it immediately with the message — retrying a real
-misconfiguration would just bury it.
+It prints the public IP and the ssh command when capacity is granted, and stops. An auth,
+parameter or quota error stops it immediately with the message — retrying a real
+misconfiguration would just bury it. Endpoint timeouts and throttling are retried instead,
+because one AD blipping mid-sweep should not end an overnight wait, and an unrecognised
+failure is tolerated six times in a row before it gives up.
 
-Tunables: `OCPUS` (default 2), `MEMORY_GB` (12), `BOOT_GB` (150), `INTERVAL` (300s).
+Tunables: `SHAPE_LADDER` (default `4:24 2:12 1:6`), `BOOT_GB` (150), `INTERVAL` (300s),
+`DISPLAY_NAME`, `SSH_KEY_FILE`. `OCPUS` and `MEMORY_GB` are **not** settings — they are
+read off the ladder on each attempt, and exporting them does nothing.
 
-**Ask for less to get in sooner.** The Always Free allocation is 4 OCPU / 24 GB of A1, but
-a request for all of it competes for a scarcer slot than a request for half. The stack's
-compose memory limits total about 5 GB, so 2 OCPU / 12 GB is comfortable, and the rest of
-the allocation stays available to add later.
+**Asking for less gets you in sooner, and the ladder asks for everything.** The Always Free
+allocation is 4 OCPU / 24 GB of A1, but a request for all of it competes for a scarcer slot
+than a request for half — so each pass tries 4:24, then 2:12, then 1:6 in every
+availability domain, and takes whichever lands first. The stack's compose memory limits
+total about 5 GB, so even the bottom rung is enough to run on, and an instance that landed
+small can be resized later. Set `SHAPE_LADDER` to a single rung to insist on one size.

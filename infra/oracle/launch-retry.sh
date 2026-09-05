@@ -3,7 +3,7 @@
 # Keep asking Oracle for an Always Free ARM instance until one is granted.
 #
 #   ./infra/oracle/launch-retry.sh              # retry forever, 5 min apart
-#   ./infra/oracle/launch-retry.sh --once       # single attempt, for testing config
+#   ./infra/oracle/launch-retry.sh --once       # one pass over every AD, then stop
 #   INTERVAL=120 ./infra/oracle/launch-retry.sh # retry faster
 #
 # Always Free A1 capacity is heavily oversubscribed, so `Out of host capacity` is the
@@ -29,7 +29,16 @@ SHAPE="VM.Standard.A1.Flex"
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/oracle_jobplatform.pub}"
 
 once=0
-[ "${1:-}" = "--once" ] && once=1
+# Anything unrecognised must stop, not fall through to the default. This read only $1 and
+# ignored the rest, so `launch-retry.sh --help` -- or a typo -- silently meant "retry
+# forever", which for this script is provisioning, not a no-op. Same shape as deploy.sh.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --once)     once=1; shift ;;
+    -h|--help)  sed -n '2,16p' "$0"; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 64 ;;
+  esac
+done
 
 log() { echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')  $*"; }
 die() { log "ERROR: $*"; exit 1; }
@@ -106,21 +115,28 @@ while :; do
     # Three classes of failure, and conflating them is what makes a retry loop useless.
     #
     #  * capacity  -- the expected answer; ask again later.
+    #  * fatal     -- auth, bad parameters, service limits. Retrying cannot fix any of
+    #                 them and looping just buries the message.
     #  * transient -- endpoint timeouts, resets, throttling. Observed on a real run: AD-3
     #                 timed out mid-sweep while AD-1 and AD-2 answered normally. Treating
     #                 these as fatal ends an overnight wait on a blip.
-    #  * fatal     -- auth, bad parameters, service limits. Retrying cannot fix any of
-    #                 them and looping just buries the message.
+    #
+    # Fatal is tested BEFORE transient, and the HTTP statuses are matched only in the
+    # ServiceError "status" field. Bare 429|50[023] matched any three digits anywhere in
+    # the output, and OCI echoes the request -- so a NotAuthorized whose subnet OCID
+    # happened to contain "503" read as a blip and retried every five minutes forever,
+    # which is precisely the outcome this classification exists to prevent.
     if echo "$out" | grep -qi 'out of host capacity\|out of capacity'; then
       log "  no capacity in $ad at ${OCPUS} OCPU / ${MEMORY_GB} GB"
-      consecutive_unknown=0
-    elif echo "$out" | grep -qiE 'timed out|timeout|connection (reset|aborted|refused)|RequestException|TooManyRequests|ServiceUnavailable|InternalServerError|429|50[023]'; then
-      log "  transient error in $ad (will retry): $(echo "$out" | grep -ioE 'The connection to endpoint timed out|[A-Za-z]*(TimeoutError|ConnectionError|TooManyRequests)' | head -1)"
       consecutive_unknown=0
     elif echo "$out" | grep -qiE 'NotAuthenticated|NotAuthorized|InvalidParameter|LimitExceeded|QuotaExceeded|CannotParseRequest'; then
       log "fatal -- retrying cannot fix this:"
       echo "$out" >&2
       exit 1
+    elif echo "$out" | grep -qiE 'timed out|timeout|connection (reset|aborted|refused)|RequestException|TooManyRequests|ServiceUnavailable|InternalServerError' ||
+         echo "$out" | grep -qE '"status":[[:space:]]*(429|500|502|503)'; then
+      log "  transient error in $ad (will retry): $(echo "$out" | grep -ioE 'The connection to endpoint timed out|[A-Za-z]*(TimeoutError|ConnectionError|TooManyRequests)' | head -1)"
+      consecutive_unknown=0
     else
       # Unrecognised. Do not exit on the first one: a novel transient error would end the
       # wait. Do not loop forever either -- give up once it is clearly not going away.
