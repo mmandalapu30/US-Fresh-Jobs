@@ -4,15 +4,17 @@ import { AppliedTile } from "@/components/AppliedTile";
 import { JobCard } from "@/components/JobCard";
 import { StatTile } from "@/components/StatTile";
 import { api } from "@/lib/api";
+import { countryOf } from "@/lib/country";
+import { currentCountry } from "@/lib/country.server";
 import { formatNumber } from "@/lib/format";
 
 // Rendered per request, not at build time.
 //
 // With `revalidate` alone this page was prerendered during `next build`, which meant the
 // build could only succeed where the API was already reachable -- impossible inside
-// `docker build`, where the api service does not exist yet. The 30s freshness is not
-// lost: api.ts sets `next: { revalidate: 30 }` on every fetch, so the data cache still
-// collapses repeat calls; only the render moves to request time.
+// `docker build`, where the api service does not exist yet. The facet calls on this page
+// are still cached for 30s -- see BOUNDED_PATHS in api.ts, where caching is limited to the
+// paths whose URL space is finite; only the render moves to request time.
 export const dynamic = "force-dynamic";
 
 /**
@@ -26,11 +28,14 @@ export const dynamic = "force-dynamic";
 const ROLES = ["software", "data-engineering"] as const;
 
 export default async function HomePage() {
+  const country = await currentCountry();
+  const board = countryOf(country);
+
   const [stats, latest, states, categories] = await Promise.all([
-    api.stats(),
-    api.latest({ limit: 8 }),
-    api.stateCounts(),
-    api.categories(),
+    api.stats({ country }),
+    api.latest({ limit: 8, country }),
+    api.stateCounts({ country }),
+    api.categories({ country }),
   ]);
 
   const topStates = states.slice(0, 12);
@@ -38,7 +43,7 @@ export default async function HomePage() {
   return (
     <div className="space-y-10">
       <section>
-        <h1 className="text-3xl font-bold tracking-tight">Fresh U.S. Jobs</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Fresh {board.label} Jobs</h1>
         <p className="mt-2 max-w-2xl text-slate-600 dark:text-slate-400">
           {formatNumber(stats.active_jobs)} active jobs from {formatNumber(stats.companies)}{" "}
           companies. Every posting keeps both the employer&apos;s posting date and the moment
@@ -151,7 +156,7 @@ export default async function HomePage() {
       </section>
 
       <section>
-        <h2 className="mb-4 text-xl font-semibold">Jobs by state</h2>
+        <h2 className="mb-4 text-xl font-semibold">Jobs by {board.subdivisionNoun}</h2>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-6">
           {topStates.map((state) => (
             <Link

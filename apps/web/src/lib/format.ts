@@ -114,10 +114,19 @@ export function formatSalary(job: JobSummary): string | null {
   return `${symbol}${compact(min)}${suffix}`;
 }
 
+/** Countries this platform keeps. A code that is not one of them is not labelled. */
+const COUNTRY_NAMES: Record<string, string> = { US: "United States", IN: "India" };
+
 export function locationLabel(job: JobSummary): string {
-  if (job.remote_type === "REMOTE" && !job.city) return "Remote (US)";
+  // Both branches used to say "US" unconditionally, which on the India board turned a
+  // remote job in Bengaluru into "Remote (US)" -- a wrong location stated with confidence.
+  if (job.remote_type === "REMOTE" && !job.city) {
+    return job.country_code ? `Remote (${job.country_code})` : "Remote";
+  }
   const parts = [job.city, job.state_code].filter(Boolean);
-  if (parts.length === 0) return job.country_code === "US" ? "United States" : "Location unknown";
+  if (parts.length === 0) {
+    return COUNTRY_NAMES[job.country_code ?? ""] ?? "Location unknown";
+  }
   return parts.join(", ");
 }
 

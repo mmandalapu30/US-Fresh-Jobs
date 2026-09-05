@@ -1,8 +1,9 @@
 # US Fresh Jobs Platform
 
-A continuously updated U.S. job data platform. Not a website with 100 jobs — the database
-preserves every qualifying job, and the UI provides fast access to the newest and most
-relevant ones.
+A continuously updated job data platform covering the **United States and India**, switched
+in the header and scoped end to end — see [`docs/08-two-boards.md`](docs/08-two-boards.md).
+Not a website with 100 jobs: the database preserves every qualifying job, and the UI provides
+fast access to the newest and most relevant ones.
 
 **Current state: milestones 1–11 and 14 are built and running on live data.** Jobs flow
 from the source bucket into PostgreSQL, out through the API, and onto a rendered Next.js

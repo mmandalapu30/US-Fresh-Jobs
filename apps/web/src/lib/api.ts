@@ -118,7 +118,6 @@ export interface Stats {
   total_jobs: number;
   active_jobs: number;
   expired_jobs: number;
-  us_jobs: number;
   remote_jobs: number;
   posted_last_hour: number;
   posted_last_6h: number;
@@ -173,6 +172,15 @@ const BOUNDED_PATHS: ReadonlySet<string> = new Set([
   "/locations/states/counts",
 ]);
 
+/**
+ * Params whose value set is small enough not to multiply the cache.
+ *
+ * `country` has two values, so a bounded path with a country is still two entries, not the
+ * open-ended set that filled a host's inodes. Nothing else belongs here: `state` alone
+ * would be fifty times every path it appears on.
+ */
+const BOUNDED_PARAMS: ReadonlySet<string> = new Set(["country"]);
+
 async function get<T>(path: string, params: Record<string, unknown> = {}): Promise<T> {
   const url = new URL(API_BASE + path);
   for (const [key, value] of Object.entries(params)) {
@@ -194,10 +202,12 @@ async function get<T>(path: string, params: Record<string, unknown> = {}): Promi
   // host's inodes and blocked deploys until the layer was dropped. Nothing in the app
   // noticed, because a cache that only grows still answers correctly.
   //
-  // So caching is opt-in, and only a parameterless call on a bounded path qualifies --
-  // one entry each. Everything else is no-store: those pages are `force-dynamic` anyway,
-  // so the data cache was only collapsing repeat calls within a single render.
-  const cacheable = BOUNDED_PATHS.has(path) && url.search === "";
+  // So caching is opt-in: a bounded path, carrying only bounded params. Everything else is
+  // no-store, which costs nothing it was not already paying -- those pages are
+  // `force-dynamic`, so the data cache was only collapsing repeat calls within a render.
+  const cacheable =
+    BOUNDED_PATHS.has(path) &&
+    [...url.searchParams.keys()].every((key) => BOUNDED_PARAMS.has(key));
 
   const response = await fetch(url, {
     ...(cacheable ? { next: { revalidate: CACHE_SECONDS } } : { cache: "no-store" as const }),
@@ -217,8 +227,9 @@ export const api = {
   recent: (params: Record<string, unknown> = {}) => get<JobPage>("/jobs/recent", params),
   job: (id: number | string) => get<JobDetail>(`/jobs/${id}`),
   search: (params: Record<string, unknown>) => get<JobPage>("/search", params),
-  stats: () => get<Stats>("/stats"),
-  stateCounts: () => get<StateCount[]>("/locations/states/counts"),
+  stats: (params: Record<string, unknown> = {}) => get<Stats>("/stats", params),
+  stateCounts: (params: Record<string, unknown> = {}) =>
+    get<StateCount[]>("/locations/states/counts", params),
   states: () => get<{ code: string; name: string }[]>("/locations/states"),
   categories: (params: Record<string, unknown> = {}) =>
     get<CategoryFacet[]>("/categories", params),

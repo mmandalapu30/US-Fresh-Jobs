@@ -5,6 +5,8 @@ import { DataFreshness } from "@/components/DataFreshness";
 
 import { AppliedNavLink } from "@/components/AppliedNavLink";
 import { AppliedProvider } from "@/components/AppliedProvider";
+import { CountrySwitcher } from "@/components/CountrySwitcher";
+import { currentCountry } from "@/lib/country.server";
 
 import "./globals.css";
 
@@ -17,7 +19,9 @@ export const metadata: Metadata = {
 // web image fails to build: `docker build` has no API to reach (docs/07 section 6).
 export const dynamic = "force-dynamic";
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const country = await currentCountry();
+
   return (
     <html lang="en">
       <body className="min-h-screen">
@@ -29,9 +33,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AppliedProvider>
           <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/85 backdrop-blur dark:border-slate-800 dark:bg-slate-950/85">
             <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+              {/*
+                The badge names the board you are on. It used to be a hardcoded "US", which
+                was the whole product; with two boards a fixed badge would quietly contradict
+                the switch beside it on every India page.
+              */}
               <Link href="/" className="flex items-center gap-2 font-semibold">
                 <span className="grid h-7 w-7 place-items-center rounded-lg bg-blue-600 text-sm text-white">
-                  US
+                  {country}
                 </span>
                 <span>Fresh Jobs</span>
               </Link>
@@ -41,6 +50,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/search" className="hover:text-blue-600">Search</Link>
                 <AppliedNavLink />
                 <Link href="/admin" className="text-slate-500 hover:text-blue-600">Admin</Link>
+                <CountrySwitcher active={country} />
               </div>
             </nav>
           </header>

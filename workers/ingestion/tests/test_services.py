@@ -100,6 +100,91 @@ class TestForeignRejection:
         assert normalizer.normalize(raw_country=junk).country_code is None
 
 
+class TestIndiaResolution:
+    """India is the second country this platform keeps, and it arrives shaped differently.
+
+    US rows are confirmed by a state code; Indian rows usually carry a city and nothing
+    else, or a subdivision name the old normalizer treated purely as grounds for rejection.
+    """
+
+    @pytest.fixture
+    def normalizer(self) -> LocationNormalizer:
+        return LocationNormalizer()
+
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [("Maharashtra", "MH"), ("Karnataka", "KA"), ("MH", "MH"), ("Orissa", "OD")],
+    )
+    def test_subdivisions_resolve(
+        self, normalizer: LocationNormalizer, state: str, expected: str
+    ) -> None:
+        result = normalizer.normalize(raw_country="India", raw_state=state)
+        assert result.country_code == "IN"
+        assert result.state_code == expected
+
+    @pytest.mark.parametrize(
+        ("city", "expected"),
+        [("Bengaluru", "KA"), ("Pune", "MH"), ("Noida", "UP"), ("Gurugram", "HR")],
+    )
+    def test_a_city_alone_carries_its_subdivision(
+        self, normalizer: LocationNormalizer, city: str, expected: str
+    ) -> None:
+        """The common shape of an Indian row: country, a city, and an empty state field.
+
+        These same city names are in NON_US_CITIES, where they mean "not American". That
+        list defends the US feed and must not also reject the country it names.
+        """
+        result = normalizer.normalize(raw_country="India", raw_city=city)
+        assert result.country_code == "IN"
+        assert result.state_code == expected
+
+    def test_an_indian_subdivision_implies_india_when_the_country_is_junk(
+        self, normalizer: LocationNormalizer
+    ) -> None:
+        """Symmetric with the US rule: a valid state is evidence of the country it is in."""
+        result = normalizer.normalize(raw_country="", raw_state="Telangana", raw_city="Hyderabad")
+        assert result.country_code == "IN"
+        assert result.state_code == "TG"
+
+    def test_a_bare_us_state_code_on_an_indian_row_is_ignored(
+        self, normalizer: LocationNormalizer
+    ) -> None:
+        """The letters "IN" are India's country code and Indiana's state code. An Indian row must never
+        pick up a US subdivision from a two-letter field."""
+        result = normalizer.normalize(raw_country="India", raw_state="IN", raw_city="Chennai")
+        assert result.country_code == "IN"
+        assert result.state_code == "TN"
+
+    def test_indiana_is_still_indiana(self, normalizer: LocationNormalizer) -> None:
+        """The other half of that collision: the US row must be untouched."""
+        result = normalizer.normalize(
+            raw_country="United States", raw_state="Indiana", raw_city="Indianapolis"
+        )
+        assert result.is_us
+        assert result.state_code == "IN"
+
+    def test_a_contradicted_indian_row_is_still_rejected(
+        self, normalizer: LocationNormalizer
+    ) -> None:
+        """India plus an Ontario subdivision is a contradiction, not an Indian job."""
+        result = normalizer.normalize(raw_country="India", raw_state="Ontario", raw_city="Toronto")
+        assert result.country_code is None
+
+    def test_us_country_with_an_indian_state_is_still_rejected(
+        self, normalizer: LocationNormalizer
+    ) -> None:
+        """The defence that predates India support, and the one it must not weaken."""
+        result = normalizer.normalize(raw_country="United States", raw_state="Maharashtra")
+        assert result.country_code is None
+        assert "not a US subdivision" in (result.reason or "")
+
+    def test_an_indian_city_alone_still_implies_nothing(
+        self, normalizer: LocationNormalizer
+    ) -> None:
+        """A city cannot promote itself to a country -- in either direction."""
+        assert normalizer.normalize(raw_city="Bengaluru").country_code is None
+
+
 class TestLocationDetails:
     @pytest.fixture
     def normalizer(self) -> LocationNormalizer:

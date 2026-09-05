@@ -101,7 +101,6 @@ class StatsResponse(BaseModel):
     total_jobs: int
     active_jobs: int
     expired_jobs: int
-    us_jobs: int
     remote_jobs: int
     posted_last_hour: int
     posted_last_6h: int
@@ -400,9 +399,11 @@ async def search_jobs(
 async def stats(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_db)],
+    country: Annotated[str, Query(min_length=2, max_length=2)] = "US",
 ) -> StatsResponse:
+    """Every figure is scoped to one country, because the board is."""
     repo = JobRepository(session)
-    data = await repo.stats()
+    data = await repo.stats(country=country)
     response.headers["Cache-Control"] = "public, max-age=60"
     return StatsResponse(**data, generated_at=utc_now())
 
@@ -413,10 +414,16 @@ async def categories(
     session: Annotated[AsyncSession, Depends(get_db)],
     state: Annotated[str | None, Query(min_length=2, max_length=3)] = None,
     remote: Annotated[list[str] | None, Query()] = None,
+    country: Annotated[str, Query(min_length=2, max_length=2)] = "US",
 ) -> list[dict[str, Any]]:
     """Counts respect the other active filters, so a chip reads "Healthcare (312)" for
     the current view rather than a misleading nationwide total."""
-    filters = JobFilters(state=state, remote=[r.upper() for r in (remote or [])], status="ACTIVE")
+    filters = JobFilters(
+        country=country,
+        state=state,
+        remote=[r.upper() for r in (remote or [])],
+        status="ACTIVE",
+    )
     response.headers["Cache-Control"] = "public, max-age=120"
     return await JobRepository(session).category_facets(filters)
 
@@ -427,8 +434,10 @@ async def seniority_levels(
     session: Annotated[AsyncSession, Depends(get_db)],
     state: Annotated[str | None, Query(min_length=2, max_length=3)] = None,
     category: Annotated[list[str] | None, Query()] = None,
+    country: Annotated[str, Query(min_length=2, max_length=2)] = "US",
 ) -> list[dict[str, Any]]:
     filters = JobFilters(
+        country=country,
         state=state,
         category=[c.strip().lower() for c in (category or []) if c.strip()],
         status="ACTIVE",
@@ -444,9 +453,11 @@ async def industries(
     state: Annotated[str | None, Query(min_length=2, max_length=3)] = None,
     category: Annotated[list[str] | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    country: Annotated[str, Query(min_length=2, max_length=2)] = "US",
 ) -> list[dict[str, Any]]:
     """Industry is a second axis to role category, not a substitute for it."""
     filters = JobFilters(
+        country=country,
         state=state,
         category=[c.strip().lower() for c in (category or []) if c.strip()],
         status="ACTIVE",
@@ -456,8 +467,11 @@ async def industries(
 
 
 @router.get("/locations/states/counts", summary="Active job count per state")
-async def state_counts(session: Annotated[AsyncSession, Depends(get_db)]) -> list[dict[str, Any]]:
-    return await JobRepository(session).by_state()
+async def state_counts(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    country: Annotated[str, Query(min_length=2, max_length=2)] = "US",
+) -> list[dict[str, Any]]:
+    return await JobRepository(session).by_state(country=country)
 
 
 @router.get("/companies", summary="Employer directory")

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Filters } from "@/components/Filters";
 import { JobCard } from "@/components/JobCard";
 import { api } from "@/lib/api";
+import { currentCountry } from "@/lib/country.server";
 import { SENIORITY_LABEL, formatNumber } from "@/lib/format";
 
 export const revalidate = 30;
@@ -52,8 +53,11 @@ export default async function JobsPage({ searchParams }: { searchParams: Search 
   const selectedSeniorities = many("seniority");
   const selectedIndustries = many("industry");
 
+  const country = await currentCountry();
+
   const [page, states, categories] = await Promise.all([
     api.jobs({
+      country,
       state: current.state,
       remote: current.remote,
       sort: current.sort,
@@ -67,11 +71,11 @@ export default async function JobsPage({ searchParams }: { searchParams: Search 
       industry: selectedIndustries,
       limit: 20,
     }),
-    api.stateCounts(),
+    api.stateCounts({ country }),
     // Only the category names are still needed, to render the active-filter line. The
     // seniority and industry counts went with the chip panel -- two fewer API calls on
     // every page load.
-    api.categories({ state: current.state, remote: current.remote }),
+    api.categories({ country, state: current.state, remote: current.remote }),
   ]);
 
   /** Build a URL preserving current filters, with a patch applied. */

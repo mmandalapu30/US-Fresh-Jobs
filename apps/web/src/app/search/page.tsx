@@ -1,5 +1,6 @@
 import { JobCard } from "@/components/JobCard";
 import { api } from "@/lib/api";
+import { currentCountry } from "@/lib/country.server";
 import { formatNumber } from "@/lib/format";
 
 export const revalidate = 30;
@@ -10,7 +11,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Searc
   const params = await searchParams;
   const q = (Array.isArray(params.q) ? params.q[0] : params.q) ?? "";
 
-  const page = q ? await api.search({ q, limit: 20 }) : null;
+  const country = await currentCountry();
+  const page = q ? await api.search({ q, limit: 20, country }) : null;
 
   return (
     <div className="space-y-6">

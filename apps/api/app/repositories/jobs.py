@@ -200,14 +200,22 @@ class JobRepository:
 
     # ---- aggregates ----------------------------------------------------------
 
-    async def stats(self) -> dict[str, Any]:
-        """Headline numbers for the homepage and the admin dashboard."""
+    async def stats(self, *, country: str = "US") -> dict[str, Any]:
+        """Headline numbers for the homepage and the admin dashboard, for one country.
+
+        Scoped rather than global because the board is now two boards: a visitor reading
+        "4,903 active jobs" while the India switch is on would be reading the US total, and
+        a single wrong number on the headline discredits every other number beside it.
+
+        The old ``us_jobs`` column is gone rather than kept for compatibility: under a
+        country scope it either duplicates ``total_jobs`` or reads zero, and both are worse
+        than its absence.
+        """
         sql = """
             SELECT
                 count(*)                                                   AS total_jobs,
                 count(*) FILTER (WHERE status = 'ACTIVE')                  AS active_jobs,
                 count(*) FILTER (WHERE status = 'EXPIRED')                 AS expired_jobs,
-                count(*) FILTER (WHERE country_code = 'US')                AS us_jobs,
                 count(*) FILTER (WHERE remote_type = 'REMOTE'
                                    AND status = 'ACTIVE')                  AS remote_jobs,
                 count(*) FILTER (WHERE posted_at_is_valid
@@ -235,8 +243,11 @@ class JobRepository:
                 (SELECT count(*) FROM sync_runs
                   WHERE status = 'RUNNING')                                AS ingest_running
             FROM jobs
+            WHERE country_code = :country
         """
-        row = (await self._session.execute(text(sql))).mappings().one()
+        row = (
+            (await self._session.execute(text(sql), {"country": country.upper()})).mappings().one()
+        )
         return dict(row)
 
     async def category_facets(self, filters: JobFilters | None = None) -> list[dict[str, Any]]:
@@ -300,16 +311,28 @@ class JobRepository:
         rows = (await self._session.execute(text(sql), params)).mappings().all()
         return [dict(row) for row in rows]
 
-    async def by_state(self, *, limit: int = 60) -> list[dict[str, Any]]:
+    async def by_state(self, *, country: str = "US", limit: int = 60) -> list[dict[str, Any]]:
+        """Active jobs per subdivision, for one country.
+
+        Both countries this platform keeps have subdivisions and both populate
+        ``state_code`` -- US states and Indian states share the column, which is safe
+        because they are only ever read alongside the country that owns them. Rows with no
+        subdivision are excluded rather than bucketed as "unknown": on the India board that
+        is a sizeable share, and a chip that filters to nothing is worse than no chip.
+        """
         sql = """
             SELECT state_code, count(*) AS job_count
               FROM jobs
-             WHERE country_code = 'US' AND status = 'ACTIVE' AND state_code IS NOT NULL
+             WHERE country_code = :country AND status = 'ACTIVE' AND state_code IS NOT NULL
              GROUP BY state_code
              ORDER BY job_count DESC
              LIMIT :limit
         """
-        rows = (await self._session.execute(text(sql), {"limit": limit})).mappings().all()
+        rows = (
+            (await self._session.execute(text(sql), {"limit": limit, "country": country.upper()}))
+            .mappings()
+            .all()
+        )
         return [dict(row) for row in rows]
 
     async def companies(

@@ -1,6 +1,7 @@
 import { getLoadStatus } from "@/app/admin/actions";
 import { LoadJobsButton } from "@/components/LoadJobsButton";
 import { api } from "@/lib/api";
+import { currentCountry } from "@/lib/country.server";
 import { absoluteTime, formatNumber } from "@/lib/format";
 
 // Rendered per request, not at build time.
@@ -32,8 +33,12 @@ interface Rejection {
 }
 
 export default async function AdminPage() {
+  // The dashboard reports on the board you are looking at: /stats is country-scoped now,
+  // so an unscoped call here would have silently reported US numbers under the India switch.
+  const country = await currentCountry();
+
   const [stats, health, loadState] = await Promise.all([
-    api.stats(),
+    api.stats({ country }),
     api.ingestion(),
     getLoadStatus(),
   ]);

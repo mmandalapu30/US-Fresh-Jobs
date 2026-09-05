@@ -25,6 +25,10 @@ from dataclasses import dataclass
 from typing import Final
 
 from jobplatform_schemas import RemoteType
+from jobplatform_schemas.india_states import (
+    resolve_india_state_code,
+    resolve_india_state_from_city,
+)
 from jobplatform_schemas.us_states import (
     AMBIGUOUS_CITY_NAMES,
     NON_US_CITIES,
@@ -36,6 +40,12 @@ from jobplatform_schemas.us_states import (
 )
 
 __all__ = ["LocationNormalizer", "ResolvedLocation"]
+
+#: Countries whose subdivisions this normalizer can resolve, and therefore the only ones
+#: whose rows can carry a ``state_code``. This is about what can be *understood*, not what
+#: is kept: INGEST_COUNTRY_ALLOWLIST decides that, and a country absent from this set can
+#: still be stored -- it just arrives with a city and no subdivision.
+SUBDIVISION_COUNTRIES: Final[frozenset[str]] = frozenset({"US", "IN"})
 
 #: Subdivisions that are definitively NOT US states. Seeing one in the state field is
 #: positive evidence the job is foreign, not merely absent evidence that it is domestic.
@@ -243,12 +253,30 @@ class LocationNormalizer:
             text=text,
         )
 
-        # --- 1. Is the state field positive evidence of a FOREIGN job? ---------
-        # Checked first because it is the strongest disqualifying signal: a country of
-        # "United States" alongside a state of "Quebec" is a contradiction, and trusting
-        # the country field would put a Canadian job in the US feed.
+        # --- 1. Country -------------------------------------------------------
+        # Resolved before the state now that the platform keeps more than one country: a
+        # foreign subdivision is only disqualifying when it belongs to a country we do not
+        # ingest, and that question cannot be answered without the country first.
         state_raw = (raw_state or "").strip()
-        if state_raw and state_raw.lower() in NON_US_SUBDIVISIONS:
+        country_code = resolve_country_code(raw_country)
+
+        # Fall back to the free-text blob when the country field is junk ("", "REMOTE").
+        if country_code is None and text:
+            country_code = self._country_from_text(text)
+
+        # --- 2. Is the state field evidence of a job we keep, or one we do not? -
+        # A recognised Indian subdivision is positive evidence of an Indian job, exactly as
+        # a US state is of an American one -- but only when the country field does not say
+        # otherwise. "United States" alongside "Maharashtra" is still a contradiction, and
+        # still loses the row rather than picking whichever half looks nicer: that check is
+        # the strongest disqualifying signal there is, and India support must not weaken it.
+        india_state = resolve_india_state_code(state_raw) if state_raw else None
+        if india_state and country_code is None:
+            country_code = "IN"
+        elif india_state and country_code != "IN":
+            india_state = None
+
+        if state_raw and not india_state and state_raw.lower() in NON_US_SUBDIVISIONS:
             return ResolvedLocation(
                 country_code=None,
                 state_code=None,
@@ -259,13 +287,6 @@ class LocationNormalizer:
                 raw_text=text or None,
                 reason=f"state {state_raw!r} is not a US subdivision",
             )
-
-        # --- 2. Country -------------------------------------------------------
-        country_code = resolve_country_code(raw_country)
-
-        # Fall back to the free-text blob when the country field is junk ("", "REMOTE").
-        if country_code is None and text:
-            country_code = self._country_from_text(text)
 
         # --- 3. State ---------------------------------------------------------
         state_code = resolve_state_code(state_raw)
@@ -302,8 +323,11 @@ class LocationNormalizer:
         # The source's country field is not trustworthy: 317 Toronto, 155 Montreal and
         # 45 Mississauga jobs all arrived labelled "United States". A definitively foreign
         # city therefore overrides the country field rather than deferring to it.
+        # Not applied to a job already resolved as Indian: this list exists to defend the
+        # US feed, and half of it (Bengaluru, Mumbai, Pune, Gurugram, Noida) is precisely
+        # the set of cities an Indian job is most likely to name.
         city_key = (city or "").strip().lower()
-        if city_key and city_key in NON_US_CITIES:
+        if city_key and city_key in NON_US_CITIES and country_code != "IN":
             return ResolvedLocation(
                 country_code=None,
                 state_code=None,
@@ -358,7 +382,13 @@ class LocationNormalizer:
             )
 
         # --- 4. Contradictions ------------------------------------------------
-        if country_code and country_code != "US" and state_code:
+        if country_code == "IN":
+            # An Indian row carries an Indian subdivision or none. Anything resolve_state_code
+            # produced here is noise -- the source emits bare two-letter codes, and "IN"
+            # itself is Indiana. The city map covers the common shape of an Indian row:
+            # a city and nothing else.
+            state_code = india_state or resolve_india_state_from_city(city)
+        elif country_code and country_code != "US" and state_code:
             # A recognised foreign country wins over a state code that merely looks US-ish
             # ("CA" is California *and* Canada).
             state_code = None
@@ -390,7 +420,7 @@ class LocationNormalizer:
 
         return ResolvedLocation(
             country_code=country_code,
-            state_code=state_code if country_code == "US" else None,
+            state_code=state_code if country_code in SUBDIVISION_COUNTRIES else None,
             city=city,
             city_normalized=self._normalize_city_key(city),
             postal_code=postal_code,
