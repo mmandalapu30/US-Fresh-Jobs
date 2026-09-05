@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import type { CountryCode } from "@/lib/country";
 import { absoluteTime, relativeTime } from "@/lib/format";
 
 /**
@@ -16,11 +17,17 @@ import { absoluteTime, relativeTime } from "@/lib/format";
  * Server-rendered on every request, so it can never show a cached time from an earlier
  * page load. If the stats call fails the strip renders nothing rather than blocking the
  * page: freshness is context, not content.
+ *
+ * The count is per board, the timestamp is not, and that asymmetry is correct: one ingest
+ * pass fills every country, so "last updated" is a fact about the platform, while "active
+ * jobs" is a fact about what you are looking at. Taking the count unscoped is what this
+ * strip did at first, and it announced 4,903 active jobs directly above a board reading
+ * zero -- two true numbers that contradict each other on sight.
  */
-export async function DataFreshness() {
+export async function DataFreshness({ country }: { country: CountryCode }) {
   let stats;
   try {
-    stats = await api.stats();
+    stats = await api.stats({ country });
   } catch {
     return null;
   }
