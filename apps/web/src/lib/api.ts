@@ -155,6 +155,24 @@ class ApiError extends Error {
   }
 }
 
+const CACHE_SECONDS = 30;
+
+/**
+ * Paths whose URL is the same on every request, so the data cache holds one entry each.
+ *
+ * Membership is not about how hot an endpoint is -- it is about whether its URL space is
+ * finite. /jobs/{id} is missing on purpose despite having no query string: one file per
+ * job id is exactly the growth this list exists to prevent.
+ */
+const BOUNDED_PATHS: ReadonlySet<string> = new Set([
+  "/stats",
+  "/categories",
+  "/seniority-levels",
+  "/industries",
+  "/locations/states",
+  "/locations/states/counts",
+]);
+
 async function get<T>(path: string, params: Record<string, unknown> = {}): Promise<T> {
   const url = new URL(API_BASE + path);
   for (const [key, value] of Object.entries(params)) {
@@ -166,10 +184,23 @@ async function get<T>(path: string, params: Record<string, unknown> = {}): Promi
     }
   }
 
+  // Job data is volatile, so a short revalidation window keeps the feed fresh without
+  // hammering the API on every render -- but only where the URL space is bounded.
+  //
+  // Next writes one file per distinct fetch URL under .next/cache/fetch-cache and never
+  // evicts it. Applying `revalidate` to every call meant every filter combination, every
+  // cursor and every job id became a permanent file in the container's writable layer:
+  // 2,251,122 files and 9.0 GB after thirteen days on production, which exhausted the
+  // host's inodes and blocked deploys until the layer was dropped. Nothing in the app
+  // noticed, because a cache that only grows still answers correctly.
+  //
+  // So caching is opt-in, and only a parameterless call on a bounded path qualifies --
+  // one entry each. Everything else is no-store: those pages are `force-dynamic` anyway,
+  // so the data cache was only collapsing repeat calls within a single render.
+  const cacheable = BOUNDED_PATHS.has(path) && url.search === "";
+
   const response = await fetch(url, {
-    // Job data is volatile. A short revalidation window keeps the feed fresh without
-    // hammering the API on every render.
-    next: { revalidate: 30 },
+    ...(cacheable ? { next: { revalidate: CACHE_SECONDS } } : { cache: "no-store" as const }),
     headers: { Accept: "application/json" },
   });
 
