@@ -40,6 +40,7 @@ class Category:
 CATEGORIES: Final[tuple[Category, ...]] = (
     Category("healthcare", "Healthcare & Nursing", "🩺"),
     Category("education", "Education & Training", "🎓"),
+    Category("workday", "Workday", "🧩"),
     Category("data-engineering", "Data Engineering", "🔧"),
     Category("data-analytics", "Data Analytics", "📊"),
     Category("data-science", "Data Science & ML", "🧪"),
@@ -70,7 +71,7 @@ CATEGORY_BY_SLUG: Final[dict[str, Category]] = {c.slug: c for c in CATEGORIES}
 #: (slug, pattern) in priority order. Patterns are matched against a lowercased title.
 #:
 #: Patterns carry a LEADING word boundary only, so a stem matches its inflections
-#: ("manufactur" -> "Manufacturing", "biolog" -> "Biologist"). A trailing  would block
+#: ("manufactur" -> "Manufacturing", "biolog" -> "Biologist"). A trailing \b would block
 #: exactly that, which silently sent thousands of jobs to "Other" on the first attempt.
 #: Alternatives that must not match forward carry their own trailing boundary.
 _RULES: Final[tuple[tuple[str, str], ...]] = (
@@ -98,6 +99,26 @@ _RULES: Final[tuple[tuple[str, str], ...]] = (
         r"childcare|child care|preschool|elementary|kindergarten|daycare|"
         r"school counselor|academic|admissions|registrar|librarian|"
         r"early childhood|special education|coach)",
+    ),
+    # --- workday ----------------------------------------------------------------
+    # Workday is its own hiring market. Consultants, integration and report developers
+    # and HRIS analysts move between Workday roles, not between the categories the bare
+    # title words would file them under -- measured on the stored rows, "Workday
+    # Developer Sr" was landing in `software`, "Business Analyst II - Workday" in
+    # `data-analytics` and "Project Manager, Salesforce or Workday experience" in
+    # `it-ops`, so the one thing they have in common was the one thing you could not
+    # filter on. Ahead of the tech block for that reason, and still behind healthcare
+    # and education, which keeps the taxonomy's existing rule that for those two the
+    # domain outranks the tooling.
+    #
+    # The product name is also an ordinary English word, so the shift-pattern sense is
+    # excluded -- "Warehouse Associate - Flexible Workday" is not an HRIS role. It is
+    # guarded from the left only: a trailing "scheduling", "time tracking" or "payroll"
+    # is a Workday module, not a description of somebody's hours.
+    (
+        "workday",
+        r"(?<!flexible )(?<!compressed )(?<!shortened )(?<!extended )(?<!standard )"
+        r"(?<!\d.day )\bworkdays?\b",
     ),
     # --- software & IT ----------------------------------------------------------
     (

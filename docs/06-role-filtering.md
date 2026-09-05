@@ -46,6 +46,32 @@ Ordering matters — first match wins:
 - **Neither precedes healthcare or education**: "Clinical Data Manager" stays healthcare,
   because for those roles the domain matters more than the tooling.
 
+### 2.1 `workday` — the platform is the market
+
+Added 2026-09-04. Workday roles were being split across three categories by whichever
+ordinary word their title reached for, which is visible in the stored rows:
+
+| title | was | is |
+|---|---|---|
+| `Workday Developer Sr` | software | workday |
+| `Business Analyst II - Workday` | data-analytics | workday |
+| `Project Manager, Salesforce or Workday experience` | it-ops | workday |
+
+A Workday consultant, integration developer, report writer and HRIS analyst are one hiring
+market — people move between those roles and not between `software` and `hr` — so the one
+attribute they share was the one attribute the board could not filter on.
+
+The rule sits **ahead of the tech block and behind healthcare and education**, which keeps
+the precedence above intact: naming the platform outranks the generic noun in the title,
+and a clinical or teaching domain still outranks the tooling.
+
+`Workday` is a product name that is also an ordinary English word, so the shift-pattern
+sense is excluded — "Warehouse Associate - Flexible Workday" is not an HRIS role. The guard
+is a **lookbehind only** (`flexible`, `compressed`, `shortened`, `extended`, `standard`,
+`4-day`): a trailing "Scheduling", "Time Tracking" or "Payroll" names a Workday module, so
+guarding the right-hand side would have thrown away real titles. Same class of bug as bare
+`spark` matching "SPARK AmeriCorps Member" (§6.2).
+
 ---
 
 ## 3. Ingestion-time scope filtering

@@ -169,6 +169,67 @@ class TestCategoryAssignment:
         assert classifier.classify_category(title) == expected
 
     @pytest.mark.parametrize(
+        "title",
+        [
+            # The first four were read out of the stored rows before the category
+            # existed, each filed under a different slug by whichever ordinary word its
+            # title happened to contain.
+            "Workday Developer Sr",
+            "Business Analyst II - Workday",
+            "Sr Mgr, Workday Platform Engineering",
+            "Project Manager, Salesforce or Workday experience",
+            "Workday Integration Consultant",
+            "Workday HCM Functional Analyst",
+            "Workday Studio Developer",
+            "Workday Report Writer",
+            "HRIS Manager (Workday)",
+            # Module names that read as ordinary scheduling words. These are the reason
+            # the ordinary-sense guard below is a lookbehind and not a lookahead.
+            "Workday Time Tracking & Scheduling Consultant",
+            "Workday Payroll Specialist",
+        ],
+    )
+    def test_workday_titles_are_their_own_category(
+        self, classifier: JobClassifier, title: str
+    ) -> None:
+        """A Workday role is one market, whatever noun the title reaches for.
+
+        `software`, `data-analytics` and `it-ops` each took a share of these, which left
+        the attribute they actually share unfilterable.
+        """
+        assert classifier.classify_category(title) == "workday"
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Warehouse Associate - Flexible Workday",
+            "Machine Operator (Compressed Workday)",
+            "Delivery Driver - 4-day workday",
+            "Retail Associate, Standard Workday",
+        ],
+    )
+    def test_the_ordinary_sense_of_workday_is_not_a_workday_role(
+        self, classifier: JobClassifier, title: str
+    ) -> None:
+        """The product name is also a plain English word.
+
+        Same class of bug as bare `spark` matching "SPARK AmeriCorps Member": a tool
+        name that doubles as a common word needs qualifying, or a warehouse shift
+        pattern lands on an HRIS board.
+        """
+        assert classifier.classify_category(title) != "workday"
+
+    def test_workday_sits_behind_healthcare_and_education(self, classifier: JobClassifier) -> None:
+        """The rule is inserted ahead of the tech block, not ahead of the taxonomy.
+
+        Those two domains outrank tooling by an existing, deliberate property of the
+        ordering — the same reason "Clinical Data Manager" stays healthcare.
+        """
+        assert classifier.classify_category("Clinical Workday Analyst - Patient Care") == (
+            "healthcare"
+        )
+
+    @pytest.mark.parametrize(
         ("title", "expected"),
         [
             # The data rules must not steal roles that merely contain a stray keyword.
