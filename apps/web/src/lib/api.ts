@@ -7,7 +7,7 @@
  * requirement is structural here, not a convention.
  */
 
-const API_BASE = process.env.API_BASE_URL ?? "http://127.0.0.1:8765/api/v1";
+const API_BASE = process.env.API_BASE_URL ?? "http://api:8000/api/v1";
 
 export type FreshnessBucket =
   | "NEW_LAST_HOUR"
